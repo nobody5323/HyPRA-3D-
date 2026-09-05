@@ -1,0 +1,44 @@
+# ===== 密钥与本地配置（红线：一律不入库）=====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ===== Python 后端 =====
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# ===== 前端 Next.js =====
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# ===== 数据与媒体产物（勿提交）=====
+# 本地向量/数据库文件与生成的视频语音体积大且含隐私，一律不入库
+*.db
+*.sqlite
+qdrant_storage/
+media/
+*.mp4
+*.mp3
+*.wav
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ===== pi 本地会话记录（含对话隐私，不提交）=====
+.pi-web/
