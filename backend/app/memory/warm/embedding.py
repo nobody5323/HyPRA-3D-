@@ -82,3 +82,21 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         raise ValueError(f"向量维度不一致：{len(a)} vs {len(b)}")
     return sum(x * y for x, y in zip(a, b))
+
+
+def create_embedding_provider(provider: str) -> EmbeddingProvider:
+    """按配置创建 embedding provider。
+
+    当前仅 deterministic（本地假实现，零依赖默认）；
+    接入真实实现（dashscope / siliconflow / openai-compatible）后在此注册，
+    接口返回不变，store 无需改动。
+    """
+    name = (provider or "deterministic").strip().lower()
+    if name in {"deterministic", "memory", "mock"} or not name:
+        return DeterministicEmbeddingProvider()
+    if name in {"dashscope", "siliconflow", "openai-compatible"}:
+        raise NotImplementedError(
+            f"provider「{name}」尚未接入：请在 .env 使用 "
+            "EMBEDDING_PROVIDER=deterministic 零依赖运行。"
+        )
+    raise ValueError(f"未知 embedding provider：{provider!r}")

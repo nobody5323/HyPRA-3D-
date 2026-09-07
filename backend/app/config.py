@@ -1,7 +1,12 @@
 """应用配置：从 backend/.env 读取运行参数与云端密钥。
 
-红线：云端密钥（百炼 / 硅基流动 / 魔珐星云 / Qdrant Cloud）一律只放
+红线：云端密钥（百炼 / 硅基流动 / 魔珐星云 / Qdrant）一律只放
 backend/.env（已被 .gitignore 排除），不入库。格式参考 backend/.env.example。
+
+双模式（配置驱动，代码零硬编码）：
+- 开发：向量库用云 Qdrant、模型用云 key；
+- 评审：docker compose 本地 Qdrant（QDRANT_URL=http://qdrant:6333），
+  embedding/LLM 由评审在 .env 自行填入（provider/key/model 均走配置）。
 """
 
 from pathlib import Path
@@ -26,13 +31,27 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
 
-    # ---- 外部服务密钥占位（真实值放 backend/.env）----
-    # 示例：
-    # qdrant_url: str = ""
-    # qdrant_api_key: str = ""
-    # dashscope_api_key: str = ""
-    # siliconflow_api_key: str = ""
-    # moya_app_id: str = ""
+    # ---- 冷层（本地 SQLite）----
+    # 数据库文件位置（相对 backend 运行目录；默认 backend/data/memory.db）
+    cold_db_path: str = "data/memory.db"
+
+    # ---- 温层（向量库：memory 本地假实现 | qdrant）----
+    # 评审用本地 docker：http://qdrant:6333（容器内互联）；开发用云 URL
+    warm_backend: str = "memory"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+
+    # ---- LLM 提供商（评审自填：dashscope | siliconflow | openai-compatible | mock）----
+    llm_provider: str = "mock"  # 默认 mock：无 key 也可跑通对话链路（占位回复）
+    llm_api_key: str = ""
+    llm_model: str = "qwen2.5-7b-instruct"
+    llm_base_url: str = ""  # openai-compatible 时必填，如 https://api.example.com/v1
+
+    # ---- Embedding（deterministic 本地假实现 | dashscope | siliconflow | openai-compatible）----
+    embedding_provider: str = "deterministic"
+    embedding_api_key: str = ""
+    embedding_model: str = "text-embedding-v3"
+    embedding_base_url: str = ""
 
 
 def get_settings() -> Settings:
