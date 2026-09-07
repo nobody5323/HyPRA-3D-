@@ -12,7 +12,7 @@ HyPRA：打通「提示词架构」与「混合记忆」的情感陪伴 3D 交�
 ## 2. 技术栈（版本随安装锁定后更新本表）
 
 - 后端：Python + FastAPI + LangChain / LangGraph
-- 记忆：**Qdrant Cloud 免费层**（温层向量库，经 `WarmMemoryStore` 接口抽象接入，便于将来换后端/自托管）+ SQLite/JSON（冷层结构化）+ 内存滚动窗口（热层）
+- 记忆：**Qdrant 向量库（双模式：本地 Docker 优先，云可切）**（温层向量库，经 `WarmMemoryStore` 接口抽象接入；开发可用云，评审用 docker compose 本地部署）+ SQLite/JSON（冷层结构化）+ 内存滚动窗口（热层）
 - 模型：Qwen2.5-7B 等开源模型，走国内托管 API（阿里百炼 / 硅基流动）
 - 多模态：魔珐星云 SDK（数字人）+ TTS（语音合成）→ MP4 / 语音文件
 - 前端：React / Next.js（对话 UI + 数字人视频播放），App Router
@@ -58,7 +58,8 @@ HyPRA：打通「提示词架构」与「混合记忆」的情感陪伴 3D 交�
 
 - 完成任一模块后必须运行验证：后端 `backend/tests`（pytest）；前端按 frontend 现有脚本（lint / build）。
 - 新增大模型 / 新增第三方依赖前，先列出方案征求确认。
-- 云端 key（百炼 / 硅基流动 / 魔珐星云 / Qdrant Cloud）一律放 `backend/.env`，不入库。
+- 云端 key（百炼 / 硅基流动 / 魔珐星云 / Qdrant）一律放 `backend/.env`，不入库。
+  双模式：评审交付用 docker compose 一键部署（本地 Qdrant），embedding/LLM 由评审在 .env 自填。
 
 ## 6. 合规与提交红线（参赛硬指标）
 
