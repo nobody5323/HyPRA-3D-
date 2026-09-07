@@ -5,6 +5,7 @@
 
 from fastapi import FastAPI
 
+from app.api import chat_router
 from app.config import get_settings
 
 
@@ -23,6 +24,7 @@ def create_app() -> FastAPI:
         """健康检查：确认服务与配置加载正常。"""
         return {"status": "ok", "app": settings.app_name}
 
+    app.include_router(chat_router)
     return app
 
 

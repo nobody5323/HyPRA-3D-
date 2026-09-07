@@ -1,5 +1,9 @@
 """FastAPI 路由层。
 
-骨架阶段：路由包占位。后续在此新增 chat / memory / media 子模块，
-并在 app/main.py 的 create_app 中通过 include_router 注册。
+- chat.py      POST /chat（提示组装骨架，LLM 待接入）
+- （后续新增 memory / media 路由子模块，在此统一导出）
 """
+
+from app.api.chat import router as chat_router
+
+__all__ = ["chat_router"]
