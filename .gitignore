@@ -29,6 +29,7 @@ build/
 *.db
 *.sqlite
 qdrant_storage/
+backend/data/
 media/
 *.mp4
 *.mp3
