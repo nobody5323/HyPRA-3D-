@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "qdrant-client>=1.12",
 ]
 
 [project.optional-dependencies]
