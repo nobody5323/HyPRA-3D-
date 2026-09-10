@@ -1,0 +1,47 @@
+# =============================================================
+# HyPRA 评审交付：docker compose 一键部署
+#   用法：docker compose up -d --build
+#   评审先在 backend/.env 填入自己的 embedding / LLM key
+#   （详见 docs/deployment.md）
+# =============================================================
+
+services:
+  # ---- 本地向量库（温层，评审零配置、无需 key）----
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: hypra-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"            # HTTP（REST API）
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---- 后端 FastAPI ----
+  backend:
+    build: ./backend
+    container_name: hypra-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    # 评审填写的云端 key（LLM/Embedding）从 backend/.env 注入，不进镜像
+    env_file:
+      - ./backend/.env
+    environment:
+      - WARM_BACKEND=qdrant            # 使用内置本地 Qdrant
+      - QDRANT_URL=http://qdrant:6333  # 容器内互联（docker compose 服务名）
+      - QDRANT_API_KEY=                # 本地无鉴权
+      - COLD_DB_PATH=/data/memory.db   # 冷层 SQLite 落盘持久卷
+    volumes:
+      - cold_data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+volumes:
+  qdrant_storage:    # 向量数据持久化
+  cold_data:         # SQLite 冷层数据持久化

@@ -1,0 +1,32 @@
+# ===== 后端 Docker 构建上下文排除 =====
+# 关键：.env 含云端 key，严禁进入镜像（运行时由 compose env_file 注入）
+
+# 密钥与本地配置
+.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# 本地开发产物
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# 数据与媒体（运行时以卷挂载，不入镜像）
+data/
+media/
+*.db
+*.sqlite
+qdrant_storage/
+*.mp4
+*.mp3
+*.wav
+
+# 测试（镜像不含测试代码）
+tests/
