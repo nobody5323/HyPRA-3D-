@@ -29,6 +29,7 @@ build/
 *.db
 *.sqlite
 qdrant_storage/
+backend/data/
 media/
 *.mp4
 *.mp3
@@ -42,3 +43,6 @@ Thumbs.db
 
 # ===== pi 本地会话记录（含对话隐私，不提交）=====
 .pi-web/
+
+# ===== 里程碑总结留档（本地开发过程记录，不入库）=====
+summaries/

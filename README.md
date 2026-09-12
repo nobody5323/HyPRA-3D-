@@ -13,7 +13,7 @@ HyPRA 借鉴 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 的提示
 - **世界书（World Info）动态注入**：JSON/YAML 条目 + 关键词 / 正则 / 向量三重触发机制，按优先级拼入上下文。
 - **混合记忆引擎（热 / 温 / 冷三层）**：
   - 热层：上下文滚动窗口，保留最近 N 轮；
-  - 温层：Qdrant Cloud 向量库，对话 Embedding 入库与语义检索（含时间衰减）；
+  - 温层：Qdrant 向量库（本地 Docker / 云双模式），对话 Embedding 入库与语义检索（含时间衰减）；
   - 冷层：SQLite/JSON 结构化事实表，回复后由 LLM 自动抽取并更新关键事实（时间、地点、人物关系）+ 增量摘要。
 - **RAG + 推理编排**：LangChain / LangGraph 组装——世界书触发 > 向量召回 > 结构化事实 > 摘要 > 滚动窗口。
 - **情绪识别与工具调用**：function calling 结构化输出情绪标签，驱动 3D 表情联动与记忆加权。
@@ -26,23 +26,24 @@ HyPRA 借鉴 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 的提示
 
 ## 🚀 快速开始
 
-> 文档建设中 —— 后端骨架 / 前端骨架搭建完成后补充。
+开发模式（零云端依赖可跑通链路）：
 
 ```bash
 # 后端
 cd backend
-# …（待补：venv / 依赖 / 配置 .env / 启动）
-
-# 前端
-cd frontend
-# …（待补：安装 / 开发服务器）
+python -m venv ../.venv && ../.venv/Scripts/pip install -e ".[dev]"
+cp .env.example .env    # 默认 mock LLM + 本地 embedding，无需任何 key
+../.venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
+# 访问 http://localhost:8000/docs 调 POST /chat 即可对话
 ```
+
+评审模式（docker compose 一键部署，见 [`docs/deployment.md`](docs/deployment.md)）。
 
 ## 🗂 目录结构
 
     backend/     Python 后端（FastAPI + LangChain/LangGraph + Qdrant + 魔珐星云）
     frontend/    Next.js 前端（对话 UI + 数字人视频播放）
-    docs/        设计文档、参赛说明、演示脚本
+    docs/        设计文档、部署说明、参赛说明、演示脚本
     AGENTS.md    项目开发约定
     LICENSE
 
