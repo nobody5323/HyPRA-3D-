@@ -13,7 +13,7 @@
 
 from openai import OpenAI
 
-from app.llm.base import ChatMessage, LLMProvider
+from app.llm.base import ChatMessage, LLMProvider, ToolCall
 
 # 各提供商默认 base_url（可被 .env 的 LLM_BASE_URL 覆盖）
 DEFAULT_BASE_URLS: dict[str, str] = {
@@ -84,3 +84,36 @@ class OpenAICompatibleProvider(LLMProvider):
         if not response.choices:
             return ""
         return response.choices[0].message.content or ""
+
+    def chat_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        *,
+        tool_choice: str | dict = "auto",
+        temperature: float = 0.7,
+    ) -> list[ToolCall] | None:
+        """function calling（OpenAI tools 协议）。
+
+        模型未触发工具调用（如老模型不支持）时返回 None，由调用方降级。
+        """
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": m.role, "content": m.content} for m in messages],
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+        if not response.choices:
+            return None
+        message = response.choices[0].message
+        if not message.tool_calls:
+            return None
+        return [
+            ToolCall(
+                name=call.function.name,
+                arguments=call.function.arguments,
+                call_id=getattr(call, "id", "") or "",
+            )
+            for call in message.tool_calls
+        ]

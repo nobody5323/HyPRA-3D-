@@ -15,6 +15,12 @@ from app.prompts.persona.loader import PersonaPreset
 from app.prompts.renderer import render_persona_prompt
 from app.rag.prompt_manager import PromptManager
 from app.graph.state import ChatState
+from app.tools.emotion import (
+    EMOTION_TOOL_NAME,
+    build_emotion_tool,
+    extract_emotion_fallback,
+    parse_emotion_result,
+)
 from app.worldbook.matcher import match_entries
 from app.worldbook.models import WorldBookEntry
 
@@ -72,10 +78,21 @@ class ChatNodes:
     # ---------- ③ 三层记忆召回 ----------
 
     def memory_recall(self, state: ChatState) -> dict:
-        """温层语义召回 + 冷层事实 + 摘要。"""
+        """温层语义召回 + 冷层事实 + 摘要（按预判情绪加权，参照⑤）。
+
+        时序说明：召回发生在生成之前，故用正则快速预判本轮情绪作为加权依据
+        （生成后的精确情绪用于下一轮与记忆写入）。
+        """
+        pre_emotion = extract_emotion_fallback(state.get("user_input", ""))
+        emotion_key = (
+            pre_emotion.emotion.value
+            if pre_emotion.emotion.value != "neutral"
+            else None
+        )
         ctx = self.memory.recall(
             state.get("companion_id", state["persona_id"]),
             state.get("user_input", ""),
+            emotion=emotion_key,
         )
         return {
             "memory_context": ctx,
@@ -107,14 +124,37 @@ class ChatNodes:
     # ---------- ⑤ LLM 生成 ----------
 
     def generate_reply(self, state: ChatState) -> dict:
-        """调用 LLM 生成助手回复。"""
-        reply = self.llm.chat([ChatMessage(**m) for m in state.get("messages", [])])
-        return {"reply": reply}
+        """生成回复 + 情绪识别（双通道）。
+
+        ① 主通道：function calling 结构化输出（回复 + 情绪标签一并返回）；
+        ② 降级：模型不支持工具调用 / 调用失败 → 普通 chat() + 正则兜底情绪。
+        两通道都保证给出非空回复与一个情绪结果，绝不空转。
+        """
+        messages = [ChatMessage(**m) for m in state.get("messages", [])]
+
+        # ① 主通道：结构化输出
+        tool_calls = self.llm.chat_with_tools(messages, [build_emotion_tool()])
+        for call in tool_calls or []:
+            if call.name != EMOTION_TOOL_NAME:
+                continue
+            result = parse_emotion_result(call.arguments)
+            if result is not None:
+                return {"reply": result.reply, "emotion": result}
+
+        # ② 降级通道：普通回复 + 兜底情绪（用真实回复替换占位文本）
+        reply = self.llm.chat(messages)
+        fallback = extract_emotion_fallback(state.get("user_input", ""))
+        fallback.reply = reply
+        return {"reply": reply, "emotion": fallback}
 
     # ---------- ⑥ 回复后事件驱动写入 ----------
 
     def write_memory(self, state: ChatState) -> dict:
-        """抽取事实 → 向量入库 → 摘要增量并入（参照③④）。"""
+        """抽取事实 → 向量入库 → 摘要增量并入（参照③④）。
+
+        本轮情绪作为 emotion_tag 随事实与向量一同落库，供后续加权召回。
+        """
+        emotion = state.get("emotion")
         writes = self.memory.remember_turn(
             state.get("companion_id", state["persona_id"]),
             state.get("user_input", ""),
@@ -122,5 +162,6 @@ class ChatNodes:
             turn_index=state.get("turn_index", 0),
             source=state.get("session_id", ""),
             subject=state.get("user_name", "用户"),
+            emotion=emotion.emotion.value if emotion is not None else None,
         )
         return {"writes": writes}

@@ -1,14 +1,17 @@
 """Mock LLM：无 key 的占位实现（开发/测试/演示兜底）。
 
 不调用任何外部服务，根据最后一条 user 消息做**关键词共情**，生成确定性的、
-符合「苏澄」温柔基调的占位回复。真实 key 接入后，chat 流程无需改动即可
-切换 provider（见 factory.create_llm_provider）。
+符合「苏澄」温柔基调的占位回复；同时支持 function calling 协议
+（chat_with_tools），使情绪链路在无 key 环境下也能完整跑通。
+真实 key 接入后，chat 流程无需改动即可切换 provider（见 factory.create_llm_provider）。
 
 设计取舍：不把用户原文直接嵌进回复（读起来破碎），改用情绪/话题关键词
 匹配 + 通用承接话术，输出更自然、更适合演示。
 """
 
-from app.llm.base import ChatMessage, LLMProvider
+import json
+
+from app.llm.base import ChatMessage, LLMProvider, ToolCall
 
 # 关键词 → 共情话术（按序匹配，首个命中生效）
 _KEYWORD_REPLIES: list[tuple[tuple[str, ...], str]] = [
@@ -70,3 +73,37 @@ class MockLLMProvider(LLMProvider):
             if any(word in last_user for word in keywords):
                 return reply
         return _DEFAULT_REPLY
+
+    def chat_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        *,
+        tool_choice: str | dict = "auto",
+        temperature: float = 0.7,
+    ) -> list[ToolCall] | None:
+        """模拟 function calling：用关键词规则生成结构化结果（回复 + 情绪）。"""
+        from app.tools.emotion import EMOTION_TOOL_NAME, extract_emotion_fallback
+
+        last_user = next(
+            (m.content for m in reversed(messages) if m.role == "user"),
+            "",
+        )
+        fallback = extract_emotion_fallback(last_user)
+        arguments = json.dumps(
+            {
+                "reply": self.chat(messages),  # 复用共情话术作为回复
+                "emotion": fallback.emotion.value,
+                "intensity": fallback.intensity,
+                "confidence": 0.5,
+                "evidence": fallback.evidence,
+            },
+            ensure_ascii=False,
+        )
+        return [
+            ToolCall(
+                name=EMOTION_TOOL_NAME,
+                arguments=arguments,
+                call_id="mock-tool-call-1",
+            )
+        ]

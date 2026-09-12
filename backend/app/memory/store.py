@@ -24,6 +24,9 @@ DEFAULT_FACT_LIMIT = 5        # 冷层事实召回条数
 DEFAULT_MEMORY_TOP_K = 3      # 温层语义召回条数
 DEFAULT_BLOCK_BUDGET = 300    # 记忆块 token 预算
 
+# 情绪加权系数（参照⑤）：当前情绪与记忆情绪标签一致时提升其召回分
+EMOTION_RECALL_BOOST = 1.25
+
 MEMORY_SECTION = "记忆回忆"
 
 
@@ -99,8 +102,19 @@ class MemoryStore:
         self.block_budget = block_budget
         self.extractor = extractor or RuleBasedExtractor()
 
-    def recall(self, companion_id: str, query: str) -> MemoryContext:
-        """按 query 召回三层记忆（任一层异常降级为 warning）。"""
+    def recall(
+        self,
+        companion_id: str,
+        query: str,
+        *,
+        emotion: str | None = None,
+    ) -> MemoryContext:
+        """按 query 召回三层记忆（任一层异常降级为 warning）。
+
+        参数:
+            emotion: 当前情绪标签（英文）；提供时对同情绪记忆加权（参照⑤），
+                实现「此刻焦虑 → 更易想起过往焦虑相关的片段」。
+        """
         warnings: list[str] = []
         memories: list[SearchResult] = []
         facts: list[Fact] = []
@@ -125,11 +139,36 @@ class MemoryStore:
         except Exception as exc:
             warnings.append(f"冷层摘要读取失败（已降级）：{exc}")
 
+        # ④ 情绪加权（参照⑤）
+        if emotion:
+            memories = self._boost_memories_by_emotion(memories, emotion)
+            facts = self._boost_facts_by_emotion(facts, emotion)
+
         return MemoryContext(
             facts=facts,
             memories=memories,
             summary=summary,
             warnings=warnings,
+        )
+
+    @staticmethod
+    def _boost_memories_by_emotion(
+        memories: list[SearchResult], emotion: str
+    ) -> list[SearchResult]:
+        """温层：同情绪记忆提升分数并重排。"""
+        for item in memories:
+            if item.record.metadata.get("emotion") == emotion:
+                item.score *= EMOTION_RECALL_BOOST
+        memories.sort(key=lambda r: r.score, reverse=True)
+        return memories
+
+    @staticmethod
+    def _boost_facts_by_emotion(facts: list[Fact], emotion: str) -> list[Fact]:
+        """冷层：同情绪事实优先（保持 importance 为次级排序键）。"""
+        return sorted(
+            facts,
+            key=lambda f: (f.emotion_tag == emotion, f.importance, f.created_at),
+            reverse=True,
         )
 
     # ---------- 写入（回复后事件驱动，参照③④）----------
@@ -143,10 +182,15 @@ class MemoryStore:
         turn_index: int = 0,
         source: str = "",
         subject: str = "用户",
+        emotion: str | None = None,
     ) -> dict[str, int]:
         """回复完成后的一次写入：抽取事实 → 向量入库 → 摘要增量并入。
 
-        返回写入统计（facts / memory / summary），异常降级为 warnings 不阻断。
+        参数:
+            emotion: 本轮情绪标签（英文）；写入事实的 emotion_tag 与向量的
+                metadata，供后续按情绪加权召回（参照⑤）。
+
+        返回写入统计（facts / memory / summary），异常降级不阻断。
         """
         stats = {"facts": 0, "memory": 0, "summary": 0}
 
@@ -162,21 +206,23 @@ class MemoryStore:
         except Exception:  # 抽取失败不影响对话
             result = None
 
-        # ② 冷层：事实入库（去重靠 store 主键）
+        # ② 冷层：事实入库（带上本轮情绪标签）
         if result is not None:
             for fact in result.facts:
                 try:
+                    if emotion:
+                        fact.emotion_tag = emotion
                     self.cold.save_fact(companion_id, fact)
                     stats["facts"] += 1
                 except Exception:
                     break
 
-        # ③ 温层：本轮用户话语向量化入库（供后续语义召回）
+        # ③ 温层：本轮用户话语向量化入库（供后续语义召回 + 情绪加权）
         try:
             self.warm.add(
                 companion_id,
                 user_text,
-                metadata={"turn": turn_index, "source": source},
+                metadata={"turn": turn_index, "source": source, "emotion": emotion},
             )
             stats["memory"] = 1
         except Exception:

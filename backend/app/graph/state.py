@@ -8,6 +8,7 @@ from typing import TypedDict
 
 from app.memory.store import MemoryContext
 from app.session.context import ChatTurn
+from app.tools.emotion import EmotionResult
 from app.worldbook.models import WorldBookEntry
 
 
@@ -38,5 +39,6 @@ class ChatState(TypedDict, total=False):
 
     # ---- 输出 ----
     reply: str
+    emotion: EmotionResult | None   # 本轮情绪判定（结构化输出或兜底）
     writes: dict[str, int]       # 记忆写入统计
     warnings: list[str]
