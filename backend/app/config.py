@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     memory_block_budget: int = 300  # 记忆块 token 预算
     memory_extractor: str = "rule"  # 回复后抽取器：rule（无 key）| llm（待接入）
 
+    # ---- PromptManager 预算（M3 分层组装）----
+    worldbook_budget: int = 400       # 世界书注入块预算
+    prompt_history_budget: int = 800  # 滚动窗口预算
+    prompt_total_budget: int = 2000   # 提示词总量预算（超出按优先级裁剪）
+
     # ---- 温层（向量库：memory 本地假实现 | qdrant）----
     # 评审用本地 docker：http://qdrant:6333（容器内互联）；开发用云 URL
     warm_backend: str = "memory"

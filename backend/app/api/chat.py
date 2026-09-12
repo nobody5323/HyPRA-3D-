@@ -1,24 +1,31 @@
-"""chat 路由。
+"""chat 路由（M3：LangGraph 编排）。
 
-POST /chat：完整对话闭环
-    ① 召回三层记忆 → 组装提示（人设 + 世界书 + 记忆 + 历史 + 本次输入）
-    ② LLM 生成回复（默认 mock，无 key 也可跑通）
-    ③ 回复后事件驱动写入：抽取事实 → 向量入库 → 摘要增量并入（参照③④）
-    ④ 会话历史追加 user/assistant 两轮
+POST /chat 的完整链路由 LangGraph 节点图驱动：
+
+    load_persona → worldbook_recall → memory_recall
+        → assemble_prompt → generate_reply → write_memory
+
+会话读写在路由层完成（图为无状态编排）：
+    ① 取/建会话（携带 history 与状态变量）
+    ② graph.invoke 生成回复并写入记忆
+    ③ 历史追加 user/assistant 两轮
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.llm.base import ChatMessage, LLMProvider
+from app.graph.chat_graph import build_chat_graph
+from app.graph.nodes import ChatNodes
+from app.llm.base import LLMProvider
 from app.llm.factory import create_llm_provider
 from app.memory.cold.extractor import create_extractor
 from app.memory.cold.sqlite_store import SqliteColdStore
 from app.memory.store import MemoryStore
 from app.memory.warm.factory import create_warm_store
 from app.prompts.persona.loader import load_builtin_presets
-from app.prompts.pipeline import assemble_chat
+from app.prompts.renderer import estimate_tokens
+from app.rag.prompt_manager import PromptManager
 from app.session.context import ChatTurn
 from app.session.repository import SessionRepository
 from app.worldbook.loader import load_builtin_entries
@@ -31,16 +38,16 @@ _presets = load_builtin_presets()
 _entries = load_builtin_entries()
 _memory_store: MemoryStore | None = None
 _llm_provider: LLMProvider | None = None
+_chat_graph = None
 
 _DEFAULT_PERSONA_ID = "therapist-elder-sister"
 
 
-def get_memory_store() -> MemoryStore:
-    """懒加载记忆门面（按配置创建冷/温层与抽取器）。
+# ---------- 依赖懒加载（测试可经 set_* 注入）----------
 
-    冷层：SQLite（按陪伴对象分表）；温层：memory（默认零依赖）或 qdrant。
-    测试可通过 set_memory_store 注入隔离实现。
-    """
+
+def get_memory_store() -> MemoryStore:
+    """懒加载记忆门面（冷层 SQLite + 温层 memory/qdrant + 规则抽取器）。"""
     global _memory_store
     if _memory_store is None:
         settings = get_settings()
@@ -62,9 +69,10 @@ def get_memory_store() -> MemoryStore:
 
 
 def set_memory_store(store: MemoryStore | None) -> None:
-    """替换/重置记忆门面（测试与运行时切换用）。"""
-    global _memory_store
+    """替换/重置记忆门面（同时失效已编译的图）。"""
+    global _memory_store, _chat_graph
     _memory_store = store
+    _chat_graph = None
 
 
 def get_llm_provider() -> LLMProvider:
@@ -82,9 +90,34 @@ def get_llm_provider() -> LLMProvider:
 
 
 def set_llm_provider(provider: LLMProvider | None) -> None:
-    """替换/重置 LLM provider（测试与运行时切换用）。"""
-    global _llm_provider
+    """替换/重置 LLM provider（同时失效已编译的图）。"""
+    global _llm_provider, _chat_graph
     _llm_provider = provider
+    _chat_graph = None
+
+
+def get_chat_graph():
+    """懒加载并编译对话编排图（依赖变更时重建）。"""
+    global _chat_graph
+    if _chat_graph is None:
+        settings = get_settings()
+        nodes = ChatNodes(
+            presets=_presets,
+            entries=_entries,
+            memory_store=get_memory_store(),
+            llm_provider=get_llm_provider(),
+            prompt_manager=PromptManager(
+                worldbook_budget=settings.worldbook_budget,
+                memory_budget=settings.memory_block_budget,
+                history_budget=settings.prompt_history_budget,
+                total_budget=settings.prompt_total_budget,
+            ),
+        )
+        _chat_graph = build_chat_graph(nodes)
+    return _chat_graph
+
+
+# ---------- 请求 / 响应模型 ----------
 
 
 class ChatRequest(BaseModel):
@@ -115,19 +148,21 @@ class ChatResponse(BaseModel):
     )
     warnings: list[str]
     estimated_tokens: int
-    note: str = Field(description="模型提供商与运行模式说明")
+    note: str = Field(description="编排方式与运行模式说明")
+
+
+# ---------- 路由 ----------
 
 
 @router.post("", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    """一轮完整对话：召回 → 组装 → 生成 → 事件驱动写入。"""
+    """一轮完整对话（LangGraph 编排）。"""
     if req.persona_id not in _presets:
         raise HTTPException(status_code=404, detail=f"未知人设：{req.persona_id}")
-    persona = _presets[req.persona_id]
-    settings = get_settings()
-    memory = get_memory_store()
 
-    # 会话：续聊复用；新聊创建
+    settings = get_settings()
+
+    # ① 会话：续聊复用；新聊创建
     session = _repository.get(req.session_id) if req.session_id else None
     if session is None:
         state_vars = {"current_mood": req.current_mood} if req.current_mood else {}
@@ -135,57 +170,59 @@ def chat(req: ChatRequest) -> ChatResponse:
             persona_id=req.persona_id,
             user_name=req.user_name,
             state_vars=state_vars,
-            session_id=req.session_id,  # 客户端自定义 id 亦可，缺省自动生成
+            session_id=req.session_id,
         )
     elif req.current_mood:
         session.set_state_var("current_mood", req.current_mood)
 
-    # ① 组装提示（history 为本次输入前的既有轮次；含三层记忆召回）
-    companion_id = req.persona_id  # 记忆按陪伴对象（角色）隔离
-    assembled = assemble_chat(
-        persona=persona,
-        user_input=req.text,
-        session=session,
-        worldbook_entries=_entries,
-        memory=memory,
-        companion_id=companion_id,
-    )
+    # ② 组装初始状态（history 为本次输入之前的既有轮次）
+    initial_state = {
+        "session_id": session.session_id,
+        "companion_id": req.persona_id,  # 记忆按陪伴对象（角色）隔离
+        "persona_id": req.persona_id,
+        "user_name": session.user_name,
+        "user_input": req.text,
+        "history": list(session.history),
+        "turn_index": len(session.history) + 1,
+        "state_vars": dict(session.state_vars),
+        "warnings": [],
+    }
 
-    # ② LLM 生成回复（默认 mock）
-    provider = get_llm_provider()
-    reply = provider.chat(
-        [ChatMessage(**m) for m in assembled.to_messages()]
-    )
-
-    # ③ 回复后事件驱动写入（参照③④）
-    turn_index = len(session.history) + 1
-    remembered = memory.remember_turn(
-        companion_id,
-        req.text,
-        reply,
-        turn_index=turn_index,
-        source=session.session_id,
-        subject=req.user_name,
-    )
+    # ③ 执行编排图（召回 → 组装 → 生成 → 写入）
+    result = get_chat_graph().invoke(initial_state)
+    reply = result.get("reply", "")
 
     # ④ 会话历史追加 user / assistant
     _repository.append_turn(session.session_id, ChatTurn(role="user", text=req.text))
     _repository.append_turn(session.session_id, ChatTurn(role="assistant", text=reply))
 
+    # ⑤ 召回统计
+    ctx = result.get("memory_context")
+    memory_counts = (
+        {
+            "memories": len(ctx.memories),
+            "facts": len(ctx.facts),
+            "summary": 1 if (ctx.summary and ctx.summary.content.strip()) else 0,
+        }
+        if ctx is not None
+        else {}
+    )
+
+    system_prompt = result.get("system_prompt", "")
     return ChatResponse(
         session_id=session.session_id,
         persona_id=req.persona_id,
         reply=reply,
-        system_prompt=assembled.system_prompt,
-        messages=assembled.to_messages(),
-        worldbook_hits=[e.id for e in assembled.worldbook_hits],
-        skipped=[e.id for e in assembled.skipped],
-        memory_counts=assembled.memory_counts,
-        remembered=remembered,
-        warnings=assembled.warnings,
-        estimated_tokens=assembled.estimated_tokens,
+        system_prompt=system_prompt,
+        messages=result.get("messages", []),
+        worldbook_hits=[e.id for e in result.get("worldbook_hits", [])],
+        skipped=[e.id for e in result.get("worldbook_skipped", [])],
+        memory_counts=memory_counts,
+        remembered=result.get("writes", {}),
+        warnings=result.get("warnings", []),
+        estimated_tokens=estimate_tokens(system_prompt),
         note=(
-            f"模型提供商：{provider.name}；记忆：召回+事件驱动写入已启用"
-            f"（向量库 {settings.warm_backend}）"
+            f"LangGraph 编排（6 节点）；模型 {get_llm_provider().name}；"
+            f"向量库 {settings.warm_backend}"
         ),
     )
