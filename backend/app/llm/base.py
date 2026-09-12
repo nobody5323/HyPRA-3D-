@@ -10,6 +10,7 @@ provider 通过工厂按配置创建（factory.py）：
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,15 @@ class ChatMessage(BaseModel):
 
     role: Role = Field(description="消息角色")
     content: str = Field(description="消息内容")
+
+
+@dataclass
+class ToolCall:
+    """一次 function calling 的工具调用。"""
+
+    name: str          # 工具名
+    arguments: str     # 参数（JSON 字符串，由调用方解析）
+    call_id: str = ""  # 工具调用 id（多轮工具对话时需要回传）
 
 
 class LLMProvider(ABC):
@@ -46,3 +56,21 @@ class LLMProvider(ABC):
             temperature: 采样温度；
             max_tokens: 回复长度上限（None 用模型默认）。
         """
+
+    def chat_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        *,
+        tool_choice: str | dict = "auto",
+        temperature: float = 0.7,
+    ) -> list[ToolCall] | None:
+        """function calling：请求模型以工具调用形式返回结构化结果。
+
+        返回:
+            工具调用列表；模型未触发工具调用或本 provider 不支持时返回 None
+            （调用方据此降级到 chat() + 正则兜底）。
+
+        默认实现返回 None（不支持）；支持 function calling 的 provider 覆盖本方法。
+        """
+        return None

@@ -136,6 +136,10 @@ class ChatResponse(BaseModel):
     session_id: str
     persona_id: str
     reply: str = Field(description="assistant 回复（mock provider 为占位文本）")
+    emotion: dict[str, object] = Field(
+        default_factory=dict,
+        description="情绪判定：label/label_zh/intensity/confidence/evidence/facial_expression/source",
+    )
     system_prompt: str
     messages: list[dict[str, str]]
     worldbook_hits: list[str] = Field(description="命中的世界书条目 id")
@@ -188,15 +192,20 @@ def chat(req: ChatRequest) -> ChatResponse:
         "warnings": [],
     }
 
-    # ③ 执行编排图（召回 → 组装 → 生成 → 写入）
+    # ③ 执行编排图（召回 → 组装 → 生成+情绪 → 写入）
     result = get_chat_graph().invoke(initial_state)
     reply = result.get("reply", "")
+    emotion = result.get("emotion")
 
-    # ④ 会话历史追加 user / assistant
+    # ④ 情绪回写状态变量：下一轮人设注入 {{current_mood}} 时生效
+    if emotion is not None:
+        session.set_state_var("current_mood", emotion.label_zh)
+
+    # ⑤ 会话历史追加 user / assistant
     _repository.append_turn(session.session_id, ChatTurn(role="user", text=req.text))
     _repository.append_turn(session.session_id, ChatTurn(role="assistant", text=reply))
 
-    # ⑤ 召回统计
+    # ⑥ 召回统计
     ctx = result.get("memory_context")
     memory_counts = (
         {
@@ -213,6 +222,19 @@ def chat(req: ChatRequest) -> ChatResponse:
         session_id=session.session_id,
         persona_id=req.persona_id,
         reply=reply,
+        emotion=(
+            {
+                "label": emotion.emotion.value,
+                "label_zh": emotion.label_zh,
+                "intensity": emotion.intensity,
+                "confidence": emotion.confidence,
+                "evidence": emotion.evidence,
+                "facial_expression": emotion.facial_expression,
+                "source": emotion.source,
+            }
+            if emotion is not None
+            else {}
+        ),
         system_prompt=system_prompt,
         messages=result.get("messages", []),
         worldbook_hits=[e.id for e in result.get("worldbook_hits", [])],
@@ -223,6 +245,6 @@ def chat(req: ChatRequest) -> ChatResponse:
         estimated_tokens=estimate_tokens(system_prompt),
         note=(
             f"LangGraph 编排（6 节点）；模型 {get_llm_provider().name}；"
-            f"向量库 {settings.warm_backend}"
+            f"向量库 {settings.warm_backend}；情绪链路已启用"
         ),
     )
