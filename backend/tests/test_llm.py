@@ -23,10 +23,15 @@ def test_factory_unknown_raises() -> None:
         create_llm_provider("not-a-provider")
 
 
-def test_factory_cloud_not_implemented() -> None:
-    """真实云 provider 尚未接入：明确报 NotImplementedError 而非静默失败。"""
-    with pytest.raises(NotImplementedError):
-        create_llm_provider("dashscope", api_key="x")
+def test_factory_cloud_provider_supported() -> None:
+    """云 provider 已接入（M3）：缺少 key 时以明确错误失败，而非 NotImplementedError。"""
+    from app.llm.openai_compatible import OpenAICompatibleProvider
+
+    provider = create_llm_provider("dashscope", api_key="test-key")
+    assert isinstance(provider, OpenAICompatibleProvider)
+
+    with pytest.raises(ValueError):  # 缺 api_key 时明确报错
+        create_llm_provider("dashscope", api_key="")
 
 
 def test_mock_chat_empty() -> None:

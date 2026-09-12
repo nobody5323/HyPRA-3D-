@@ -1,0 +1,175 @@
+"""LangGraph 编排测试：节点行为 + 图端到端。"""
+
+import pytest
+
+from app.graph.chat_graph import (
+    NODE_SEQUENCE,
+    build_chat_graph,
+)
+from app.graph.nodes import ChatNodes
+from app.llm.mock import MockLLMProvider
+from app.memory.cold.sqlite_store import SqliteColdStore
+from app.memory.store import MemoryStore
+from app.memory.warm.inmemory_store import InMemoryWarmStore
+from app.prompts.persona.loader import load_builtin_presets
+from app.rag.prompt_manager import PromptManager
+from app.worldbook.loader import load_builtin_entries
+
+PERSONA_ID = "therapist-elder-sister"
+
+
+@pytest.fixture()
+def memory(tmp_path) -> MemoryStore:
+    return MemoryStore(SqliteColdStore(db_path=tmp_path / "m.db"), InMemoryWarmStore())
+
+
+@pytest.fixture()
+def nodes(memory: MemoryStore) -> ChatNodes:
+    return ChatNodes(
+        presets=load_builtin_presets(),
+        entries=load_builtin_entries(),
+        memory_store=memory,
+        llm_provider=MockLLMProvider(),
+        prompt_manager=PromptManager(),
+    )
+
+
+@pytest.fixture()
+def graph(nodes: ChatNodes):
+    return build_chat_graph(nodes)
+
+
+def _state(**overrides) -> dict:
+    base = {
+        "session_id": "sess-1",
+        "companion_id": PERSONA_ID,
+        "persona_id": PERSONA_ID,
+        "user_name": "小林",
+        "user_input": "我最近总是失眠",
+        "history": [],
+        "turn_index": 1,
+        "state_vars": {"current_mood": "低落"},
+    }
+    base.update(overrides)
+    return base
+
+
+# ---------- 节点单测 ----------
+
+
+def test_load_persona_replaces_state_vars(nodes: ChatNodes) -> None:
+    out = nodes.load_persona(_state())
+    assert "小林" in out["persona_text"]
+    assert "低落" in out["persona_text"]
+    assert "{{" not in out["persona_text"]
+
+
+def test_worldbook_recall_triggers(nodes: ChatNodes) -> None:
+    out = nodes.worldbook_recall(_state(user_input="我又失眠了"))
+    assert "night-mode" in [e.id for e in out["worldbook_hits"]]
+    assert out["worldbook_text"]
+
+
+def test_worldbook_recall_no_hit(nodes: ChatNodes) -> None:
+    out = nodes.worldbook_recall(_state(user_input="今天天气不错"))
+    assert out["worldbook_hits"] == []
+    assert out["worldbook_text"] == ""
+
+
+def test_memory_recall_empty_initially(nodes: ChatNodes) -> None:
+    out = nodes.memory_recall(_state())
+    assert out["warm_lines"] == []
+    assert out["fact_lines"] == []
+    assert out["summary_text"] == ""
+
+
+def test_assemble_prompt_fixed_order(nodes: ChatNodes) -> None:
+    state = {**_state(), "persona_text": "人设", "worldbook_text": "世界书内容",
+             "warm_lines": ["回忆"], "fact_lines": ["事实"], "summary_text": "摘要"}
+    out = nodes.assemble_prompt(state)
+    prompt = out["system_prompt"]
+    assert prompt.index("[角色人设]") < prompt.index("[场景补充]") < prompt.index("[记忆回忆]")
+    assert out["messages"][-1]["role"] == "user"
+
+
+def test_generate_reply_uses_llm(nodes: ChatNodes) -> None:
+    out = nodes.generate_reply({**_state(), "messages": [
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "我最近总是失眠"},
+    ]})
+    assert out["reply"]
+    assert "睡" in out["reply"] or "休息" in out["reply"]
+
+
+def test_write_memory_writes_layers(nodes: ChatNodes, memory: MemoryStore) -> None:
+    out = nodes.write_memory({**_state(), "reply": "我听着呢"})
+    assert out["writes"]["memory"] == 1      # 温层入库
+    assert out["writes"]["facts"] >= 1       # 冷层事实（失眠）
+    assert out["writes"]["summary"] == 1     # 冷层摘要
+    assert memory.cold.list_facts(PERSONA_ID)
+
+
+# ---------- 图端到端 ----------
+
+
+def test_graph_node_sequence_defined() -> None:
+    """编排顺序应与人设→世界书→记忆→组装→生成→写入一致。"""
+    assert NODE_SEQUENCE == [
+        "load_persona",
+        "worldbook_recall",
+        "memory_recall",
+        "assemble_prompt",
+        "generate_reply",
+        "write_memory",
+    ]
+
+
+def test_graph_end_to_end(graph) -> None:
+    result = graph.invoke(_state())
+
+    assert result["reply"]
+    assert "[角色人设]" in result["system_prompt"]
+    assert result["messages"][-1] == {"role": "user", "content": "我最近总是失眠"}
+    # 写入链路生效
+    assert result["writes"]["memory"] == 1
+    assert result["writes"]["summary"] == 1
+    # 状态变量进入人设
+    assert "小林" in result["persona_text"]
+
+
+def test_graph_worldbook_and_memory_in_prompt(graph) -> None:
+    result = graph.invoke(_state(user_input="我又失眠了"))
+    prompt = result["system_prompt"]
+    assert "night-mode" in [e.id for e in result["worldbook_hits"]]
+    assert "[场景补充]" in prompt
+
+
+def test_graph_memory_cross_turn(graph) -> None:
+    """第一轮写入的记忆，第二轮应被召回进 prompt（闭环）。"""
+    graph.invoke(_state(user_input="我最怕打雷，会躲进被子", turn_index=1))
+    second = graph.invoke(_state(user_input="今天又打雷了", turn_index=2))
+
+    assert "[记忆回忆]" in second["system_prompt"]
+    assert "打雷" in second["system_prompt"]
+    assert second["writes"]["memory"] == 1
+
+
+def test_graph_history_included_in_messages(graph) -> None:
+    from app.session.context import ChatTurn
+
+    history = [
+        ChatTurn(role="user", text="昨天没睡好"),
+        ChatTurn(role="assistant", text="听起来很辛苦"),
+    ]
+    result = graph.invoke(_state(history=history, turn_index=3))
+    roles = [m["role"] for m in result["messages"]]
+    assert roles[0] == "system"
+    assert roles[1:-1] == ["user", "assistant"]
+    assert roles[-1] == "user"
+
+
+def test_graph_warnings_accumulate(graph) -> None:
+    """缺失状态变量时应有告警，且不中断编排。"""
+    result = graph.invoke({**_state(), "state_vars": {}})
+    assert result["warnings"]  # current_mood 缺失告警
+    assert result["reply"]

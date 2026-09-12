@@ -1,13 +1,20 @@
 """LLM 提供商工厂：按配置创建 provider 实例。
 
-新接入真实 provider（dashscope / siliconflow / openai-compatible）时：
-1. 在 llm/ 下新增实现模块（实现 LLMProvider）；
-2. 在本工厂注册 name → 构造逻辑。
-上层（chat 流程）只依赖 LLMProvider 接口，不感知具体实现。
+支持的 provider：
+- mock                本地占位实现（无 key，默认）
+- dashscope           阿里百炼（Qwen）
+- siliconflow         硅基流动
+- openai-compatible   任意 OpenAI 兼容端点（需 LLM_BASE_URL）
+
+上层（LangGraph 节点 / chat 路由）只依赖 LLMProvider 接口。
 """
 
 from app.llm.base import LLMProvider
 from app.llm.mock import MockLLMProvider
+from app.llm.openai_compatible import OpenAICompatibleProvider
+
+# 走 OpenAI 兼容实现（openai SDK）的 provider 名
+_OPENAI_COMPATIBLE_NAMES = {"dashscope", "siliconflow", "openai-compatible"}
 
 
 def create_llm_provider(
@@ -16,21 +23,24 @@ def create_llm_provider(
     api_key: str = "",
     model: str = "",
     base_url: str = "",
+    http_client=None,
 ) -> LLMProvider:
     """按名称创建 LLM provider。
 
     参数:
         provider: mock | dashscope | siliconflow | openai-compatible；
-        api_key / model / base_url: 真实 provider 的接入参数
-            （mock 忽略；接入真实实现后使用）。
+        api_key / model / base_url: 云端接入参数（mock 忽略）；
+        http_client: 自定义 httpx 客户端（测试注入用）。
     """
     name = (provider or "mock").strip().lower()
     if name == "mock" or not name:
         return MockLLMProvider()
-    if name in {"dashscope", "siliconflow", "openai-compatible"}:
-        # TODO: 接入真实云端实现（需在 .env 配置 key / model / base_url）
-        raise NotImplementedError(
-            f"provider「{name}」尚未接入：请先实现 llm/ 下的云端实现，"
-            "或在 .env 使用 LLM_PROVIDER=mock 无 key 运行。"
+    if name in _OPENAI_COMPATIBLE_NAMES:
+        return OpenAICompatibleProvider(
+            name=name,
+            api_key=api_key,
+            model=model or "qwen2.5-7b-instruct",
+            base_url=base_url or None,
+            http_client=http_client,
         )
     raise ValueError(f"未知 LLM provider：{provider!r}")
