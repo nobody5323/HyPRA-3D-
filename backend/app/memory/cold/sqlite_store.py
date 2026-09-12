@@ -2,8 +2,12 @@
 
 存储文件：backend/data/memory.db（已在 gitignore 排除；路径可经构造参数覆盖）。
 隔离：按 companion_id 分表 —— facts_{companion} / summary_{companion}（参照⑧）。
+安全：companion_id 先做白名单校验，再规范化为合法表名（连字符等 → 下划线），
+      防止表名注入与 SQL 语法错误。
 """
 
+import hashlib
+import re
 import sqlite3
 import uuid
 from datetime import datetime
@@ -24,18 +28,38 @@ _DEFAULT_DB = Path(__file__).resolve().parent.parent.parent.parent / "data" / "m
 _TS_FMT = "%Y-%m-%dT%H:%M:%S.%f"
 
 
+# 允许的 companion_id 字符集（字母数字、下划线、连字符）
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def _table(companion_id: str) -> str:
-    """按陪伴对象生成事实表名（companion_id 已做安全字符校验）。"""
-    return f"facts_{companion_id}"
+    """按陪伴对象生成事实表名（非法字符规范化为下划线）。"""
+    return f"facts_{_normalize(companion_id)}"
 
 
 def _summary_table(companion_id: str) -> str:
-    return f"summary_{companion_id}"
+    return f"summary_{_normalize(companion_id)}"
+
+
+def _normalize(companion_id: str) -> str:
+    """把 companion_id 规范化为合法且唯一的表名片段。
+
+    无非法字符时直接返回（表名可读）：
+        therapist → therapist
+    含非法字符（如连字符）时追加短哈希，保证不同 id 不碰撞：
+        therapist-elder-sister → therapist_elder_sister_4f2a1c
+        therapist_elder_sister → therapist_elder_sister（与上面不同）
+    """
+    slug = re.sub(r"[^0-9A-Za-z_]", "_", companion_id)
+    if slug == companion_id:
+        return slug
+    digest = hashlib.md5(companion_id.encode("utf-8")).hexdigest()[:6]
+    return f"{slug}_{digest}"
 
 
 def _valid_companion_id(companion_id: str) -> str:
-    """companion_id 仅允许字母数字下划线（防表名注入）。"""
-    if not companion_id or not companion_id.replace("_", "").isalnum():
+    """companion_id 白名单校验（防表名注入）。"""
+    if not companion_id or not _SAFE_ID.match(companion_id):
         raise ValueError(f"非法的 companion_id：{companion_id!r}")
     return companion_id
 

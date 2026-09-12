@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # 数据库文件位置（相对 backend 运行目录；默认 backend/data/memory.db）
     cold_db_path: str = "data/memory.db"
 
+    # ---- 记忆召回参数（三层聚合）----
+    memory_fact_limit: int = 5      # 冷层事实召回条数
+    memory_top_k: int = 3           # 温层语义召回条数
+    memory_block_budget: int = 300  # 记忆块 token 预算
+    memory_extractor: str = "rule"  # 回复后抽取器：rule（无 key）| llm（待接入）
+
     # ---- 温层（向量库：memory 本地假实现 | qdrant）----
     # 评审用本地 docker：http://qdrant:6333（容器内互联）；开发用云 URL
     warm_backend: str = "memory"

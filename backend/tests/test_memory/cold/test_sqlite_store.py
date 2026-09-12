@@ -97,6 +97,24 @@ def test_companion_isolation(store: SqliteColdStore) -> None:
     assert all(f.object == "A 的秘密" for f in facts_a)
 
 
+def test_kebab_case_companion_id(store: SqliteColdStore) -> None:
+    """回归：kebab-case 的陪伴对象 id（如 therapist-elder-sister）必须可用。
+
+    真实 chat 流程以 persona.id 作为 companion_id，含连字符；
+    早期实现会因表名校验拒绝而静默写入失败。
+    """
+    cid = "therapist-elder-sister"
+    store.save_fact(cid, _fact(object="猫"))
+    assert len(store.list_facts(cid)) == 1
+
+    store.append_summary(cid, scope_end=3, new_content="摘要内容")
+    summary = store.get_summary(cid)
+    assert summary is not None and summary.scope_end == 3
+
+    # 与相似命名的其它对象不混淆
+    assert store.list_facts("therapist_elder_sister") == []
+
+
 def test_summary_append_incremental(store: SqliteColdStore) -> None:
     """摘要应滚动增量并入，而非覆盖。"""
     assert store.get_summary("therapist") is None

@@ -43,3 +43,44 @@ def test_chat_unknown_persona_404() -> None:
 def test_chat_empty_text_422() -> None:
     resp = client.post("/chat", json={"text": ""})
     assert resp.status_code == 422
+
+
+def test_chat_includes_memory_recall(tmp_path) -> None:
+    """预置记忆后，召回内容应进入 system_prompt 的记忆块。"""
+    from app.api import chat as chat_module
+    from app.memory.cold.sqlite_store import SqliteColdStore
+    from app.memory.store import MemoryStore
+    from app.memory.warm.inmemory_store import InMemoryWarmStore
+
+    cold = SqliteColdStore(db_path=tmp_path / "chat_memory.db")
+    warm = InMemoryWarmStore()
+    warm.add("therapist-elder-sister", "小林说过他最怕打雷，会躲进被子里")
+    chat_module.set_memory_store(MemoryStore(cold, warm))
+
+    resp = client.post("/chat", json={"text": "今天又打雷了"})
+    body = resp.json()
+    assert resp.status_code == 200
+    assert "[记忆回忆]" in body["system_prompt"]
+    assert "怕打雷" in body["system_prompt"]
+    assert body["memory_counts"]["memories"] >= 1
+
+
+def test_chat_memory_block_after_worldbook() -> None:
+    """记忆块应排在世界书节之后（固定顺序）。"""
+    from app.api import chat as chat_module
+    from app.memory.cold.sqlite_store import SqliteColdStore
+    from app.memory.store import MemoryStore
+    from app.memory.warm.inmemory_store import InMemoryWarmStore
+    import tempfile
+    from pathlib import Path
+
+    tmp = Path(tempfile.mkdtemp()) / "m.db"
+    warm = InMemoryWarmStore()
+    warm.add("therapist-elder-sister", "小林睡不着时喜欢聊猫")
+    chat_module.set_memory_store(MemoryStore(SqliteColdStore(db_path=tmp), warm))
+
+    # 该输入同时命中世界书（失眠→night-mode）与记忆（失眠/猫）
+    body = client.post("/chat", json={"text": "我又失眠了，想起上次聊的猫"}).json()
+    prompt = body["system_prompt"]
+    assert "[场景补充]" in prompt and "[记忆回忆]" in prompt
+    assert prompt.index("[场景补充]") < prompt.index("[记忆回忆]")
