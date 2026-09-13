@@ -1,0 +1,38 @@
+# =============================================================
+# 模型适配档（per-model）
+#   不同模型对指令的敏感度、对采样参数的容忍度不同；
+#   这里为每个模型记录「技术适配」——与文风预设正交互补。
+#   匹配规则：按 match 中的子串匹配模型名，取最长匹配；无匹配用 default。
+#   合并规则：文风预设的 sampling 覆盖本档的 sampling（文风更贴近内容意图），
+#             本档独有的键（如 top_p / style_hint）保留。
+# =============================================================
+
+profiles:
+  - id: qwen3.7-flash
+    match: ["qwen3.7-flash", "qwen3", "qwen"]
+    temperature: 0.85
+    top_p: 0.9
+    frequency_penalty: 0.4      # 抑制复读与句式重复
+    presence_penalty: 0.1
+    max_tokens: 400             # 防长篇大论（文风预设可覆盖）
+    style_hint: |
+      不要使用 markdown 语法（标题、加粗、列表、分隔线），也不要用 emoji；
+      直接说人话，不要写"首先/其次/总之"这类结构词。
+
+  - id: deepseek
+    match: ["deepseek"]
+    temperature: 0.8
+    top_p: 0.9
+    frequency_penalty: 0.35
+    max_tokens: 400
+    style_hint: |
+      避免分点罗列与总结式结尾；不要使用 emoji 与 markdown 列表。
+
+  - id: default
+    match: ["*"]
+    temperature: 0.8
+    top_p: 0.95
+    frequency_penalty: 0.3
+    max_tokens: 400
+    style_hint: |
+      避免列点式表达、客套收尾与说教口吻。

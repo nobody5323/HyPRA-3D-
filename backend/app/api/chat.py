@@ -25,6 +25,7 @@ from app.memory.store import MemoryStore
 from app.memory.warm.factory import create_warm_store
 from app.prompts.persona.loader import load_builtin_presets
 from app.prompts.renderer import estimate_tokens
+from app.prompts.style.loader import load_builtin_styles
 from app.rag.prompt_manager import PromptManager
 from app.session.context import ChatTurn
 from app.session.repository import SessionRepository
@@ -36,6 +37,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 _repository = SessionRepository()
 _presets = load_builtin_presets()
 _entries = load_builtin_entries()
+_styles = load_builtin_styles()
 _memory_store: MemoryStore | None = None
 _llm_provider: LLMProvider | None = None
 _chat_graph = None
@@ -85,6 +87,7 @@ def get_llm_provider() -> LLMProvider:
             api_key=settings.llm_api_key,
             model=settings.llm_model,
             base_url=settings.llm_base_url,
+            timeout=settings.llm_timeout,
         )
     return _llm_provider
 
@@ -101,17 +104,22 @@ def get_chat_graph():
     global _chat_graph
     if _chat_graph is None:
         settings = get_settings()
+        provider = get_llm_provider()
         nodes = ChatNodes(
             presets=_presets,
             entries=_entries,
             memory_store=get_memory_store(),
-            llm_provider=get_llm_provider(),
+            llm_provider=provider,
             prompt_manager=PromptManager(
                 worldbook_budget=settings.worldbook_budget,
                 memory_budget=settings.memory_block_budget,
                 history_budget=settings.prompt_history_budget,
                 total_budget=settings.prompt_total_budget,
+                style_budget=settings.prompt_style_budget,
             ),
+            styles=_styles,
+            default_style_id=settings.style_preset,
+            model_name=settings.llm_model,
         )
         _chat_graph = build_chat_graph(nodes)
     return _chat_graph
@@ -128,6 +136,10 @@ class ChatRequest(BaseModel):
     persona_id: str = Field(default=_DEFAULT_PERSONA_ID, description="人设预设 id")
     user_name: str = Field(default="朋友", description="用户称呼")
     current_mood: str | None = Field(default=None, description="当前情绪标签（可选）")
+    style_id: str | None = Field(
+        default=None,
+        description="文风预设 id（可选，缺省用服务端默认；用于 A/B 对比演示）",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -152,6 +164,10 @@ class ChatResponse(BaseModel):
     )
     warnings: list[str]
     estimated_tokens: int
+    style: dict[str, object] = Field(
+        default_factory=dict,
+        description="本轮文风与采样：style_id/style_name/examples/sampling",
+    )
     note: str = Field(description="编排方式与运行模式说明")
 
 
@@ -189,6 +205,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         "history": list(session.history),
         "turn_index": len(session.history) + 1,
         "state_vars": dict(session.state_vars),
+        "style_id": req.style_id or settings.style_preset,
         "warnings": [],
     }
 
@@ -218,6 +235,19 @@ def chat(req: ChatRequest) -> ChatResponse:
     )
 
     system_prompt = result.get("system_prompt", "")
+    sampling = result.get("sampling")
+    used_style_id = result.get("style_id", "")
+    style_meta: dict[str, object] = {}
+    if used_style_id:
+        preset = _styles.get(used_style_id)
+        style_meta = {
+            "style_id": used_style_id,
+            "style_name": preset.name if preset else "",
+            "examples": result.get("example_count", 0),
+            "sampling": sampling.to_provider_kwargs() if sampling else {},
+            "profile": sampling.profile_id if sampling else "",
+        }
+
     return ChatResponse(
         session_id=session.session_id,
         persona_id=req.persona_id,
@@ -243,8 +273,10 @@ def chat(req: ChatRequest) -> ChatResponse:
         remembered=result.get("writes", {}),
         warnings=result.get("warnings", []),
         estimated_tokens=estimate_tokens(system_prompt),
+        style=style_meta,
         note=(
             f"LangGraph 编排（6 节点）；模型 {get_llm_provider().name}；"
-            f"向量库 {settings.warm_backend}；情绪链路已启用"
+            f"向量库 {settings.warm_backend}；情绪链路已启用；"
+            f"文风 {used_style_id or '未启用'}"
         ),
     )

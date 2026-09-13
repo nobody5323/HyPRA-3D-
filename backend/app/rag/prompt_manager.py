@@ -27,6 +27,7 @@ LAYER_FACTS = "cold_facts"       # 冷层结构化事实
 LAYER_SUMMARY = "summary"        # 冷层摘要
 LAYER_HISTORY = "history"        # 滚动窗口（可裁最旧）
 LAYER_USER = "user_input"        # 本次输入（必留）
+LAYER_STYLE = "style"            # 表达风格（M5，放 system 末尾：越靠近输入影响越强）
 
 # ---- 段落标题 ----
 ROLE_DEF_SECTION = "角色人设"
@@ -38,16 +39,18 @@ DEFAULT_WORLDBOOK_BUDGET = 400
 DEFAULT_MEMORY_BUDGET = 300
 DEFAULT_HISTORY_BUDGET = 800
 DEFAULT_TOTAL_BUDGET = 2000
+DEFAULT_STYLE_BUDGET = 500     # 风格块预算（含示例对话）
 
 # 层优先级（数字越大越重要，裁剪时从最小开始）
 _LAYER_PRIORITY = {
     LAYER_PERSONA: 100,
+    LAYER_USER: 100,
+    LAYER_STYLE: 90,      # 表达风格很重要，但在总量不足时仍可裁（排在必留层之后）
     LAYER_WORLDBOOK: 80,
     LAYER_WARM: 60,
     LAYER_FACTS: 55,
     LAYER_SUMMARY: 50,
     LAYER_HISTORY: 20,
-    LAYER_USER: 100,
 }
 
 
@@ -94,6 +97,7 @@ class BuiltPrompt:
     total_tokens: int = 0
     warnings: list[str] = field(default_factory=list)
     dropped_layers: list[str] = field(default_factory=list)
+    example_count: int = 0   # 注入的示例对话组数（few-shot，用于调试/展示）
 
     @property
     def memory_block(self) -> str:
@@ -111,11 +115,13 @@ class PromptManager:
         memory_budget: int = DEFAULT_MEMORY_BUDGET,
         history_budget: int = DEFAULT_HISTORY_BUDGET,
         total_budget: int = DEFAULT_TOTAL_BUDGET,
+        style_budget: int = DEFAULT_STYLE_BUDGET,
     ) -> None:
         self.worldbook_budget = worldbook_budget
         self.memory_budget = memory_budget
         self.history_budget = history_budget
         self.total_budget = total_budget
+        self.style_budget = style_budget
 
     # ---------- 内部：按预算截断文本/列表 ----------
 
@@ -169,14 +175,32 @@ class PromptManager:
         fact_lines: list[str] | None = None,
         summary_text: str = "",
         history: list[ChatTurn] | None = None,
+        style_text: str = "",
+        examples: list[tuple[str, str]] | None = None,
     ) -> BuiltPrompt:
         """组装完整提示。
 
         参数均为**已渲染好**的各层内容（召回与变量替换由调用方完成），
         本方法只负责分层编排、预算与裁剪。
+
+        参数:
+            style_text: 表达风格指令块，放在 **system 末尾**（越靠近输入影响越强）；
+            examples: 示例对话（few-shot），以真实消息对插在历史之前。
         """
         warnings: list[str] = []
         history = list(history or [])
+        examples = list(examples or [])
+
+        # ---- ⓪ 示例对话预算控制（超出则从后截断） ----
+        kept_examples: list[tuple[str, str]] = []
+        used_example_tokens = 0
+        for user_text, assistant_text in examples:
+            cost = estimate_tokens(user_text) + estimate_tokens(assistant_text)
+            if used_example_tokens + cost > max(self.style_budget // 2, 60):
+                warnings.append("示例对话超出预算，已截断部分示例" )
+                break
+            kept_examples.append((user_text, assistant_text))
+            used_example_tokens += cost
 
         # ---- ① 层内预算 ----
         wb_body, wb_cut = self._fit_text(worldbook_text, self.worldbook_budget)
@@ -184,6 +208,7 @@ class PromptManager:
         fact_lines, fact_cut = self._fit_lines(list(fact_lines or []), self.memory_budget)
         summary_text, summary_cut = self._fit_text(summary_text, self.memory_budget // 2)
         history, history_cut = self._fit_history(history, self.history_budget)
+        style_text, style_cut = self._fit_text(style_text, self.style_budget)
 
         layers: dict[str, PromptLayer] = {
             LAYER_PERSONA: PromptLayer(
@@ -217,6 +242,10 @@ class PromptManager:
                 key=LAYER_USER, title="本次输入", body=user_input,
                 priority=_LAYER_PRIORITY[LAYER_USER], mandatory=True,
             ),
+            LAYER_STYLE: PromptLayer(
+                key=LAYER_STYLE, title="表达风格", body=style_text,
+                priority=_LAYER_PRIORITY[LAYER_STYLE], truncated=style_cut,
+            ),
         }
 
         dropped: list[str] = []
@@ -234,8 +263,8 @@ class PromptManager:
             history.pop(0)
             layers[LAYER_HISTORY].tokens = sum(estimate_tokens(t.text) for t in history)
             layers[LAYER_HISTORY].truncated = True
-        # 2b) 再按优先级从低到高裁剪（摘要 → 事实 → 召回 → 世界书）
-        for key in (LAYER_SUMMARY, LAYER_FACTS, LAYER_WARM, LAYER_WORLDBOOK):
+        # 2b) 再按优先级从低到高裁剪（摘要 → 事实 → 召回 → 世界书 → 风格）
+        for key in (LAYER_SUMMARY, LAYER_FACTS, LAYER_WARM, LAYER_WORLDBOOK, LAYER_STYLE):
             if _total() <= self.total_budget:
                 break
             layer = layers[key]
@@ -246,27 +275,35 @@ class PromptManager:
             layer.truncated = True
             dropped.append(key)
             warnings.append(f"总量预算不足，已裁减「{layer.title or key}」层")
+            if key == LAYER_STYLE:
+                kept_examples = []  # 风格层被裁时，示例对话一并舍弃（保持一致）
 
         # 3) 历史层文本按裁剪后重建
         layers[LAYER_HISTORY].body = "\n".join(f"{t.role}: {t.text}" for t in history)
 
-        # ---- ③ 拼装 system prompt ----
+        # ---- ③ 拼装 system prompt（风格块放最末：越靠近输入影响越强） ----
         sections: list[str] = [f"[{ROLE_DEF_SECTION}]\n{layers[LAYER_PERSONA].body}"]
         if not layers[LAYER_WORLDBOOK].empty:
             sections.append(f"[{WORLDBOOK_SECTION}]\n{layers[LAYER_WORLDBOOK].body}")
         memory_block = _render_memory_block(layers)
         if memory_block:
             sections.append(memory_block)
+        if not layers[LAYER_STYLE].empty:
+            sections.append(layers[LAYER_STYLE].body)
         system_prompt = "\n\n".join(sections)
 
-        # ---- ④ 组装 messages ----
+        # ---- ④ 组装 messages：示例对话（few-shot）插在历史之前 ----
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        for user_text, assistant_text in kept_examples:
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": assistant_text})
         messages.extend({"role": t.role, "content": t.text} for t in history)
         messages.append({"role": "user", "content": user_input})
 
         total_tokens = (
             estimate_tokens(system_prompt)
             + sum(estimate_tokens(t.text) for t in history)
+            + sum(estimate_tokens(u) + estimate_tokens(a) for u, a in kept_examples)
             + estimate_tokens(user_input)
         )
 
@@ -278,4 +315,5 @@ class PromptManager:
             total_tokens=total_tokens,
             warnings=warnings,
             dropped_layers=dropped,
+            example_count=len(kept_examples),
         )

@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     worldbook_budget: int = 400       # 世界书注入块预算
     prompt_history_budget: int = 800  # 滚动窗口预算
     prompt_total_budget: int = 2000   # 提示词总量预算（超出按优先级裁剪）
+    prompt_style_budget: int = 500    # 表达风格块预算（含示例对话）
+
+    # ---- 文风预设（M5 风格系统）----
+    # 与人设正交：人设管「是谁」，文风管「怎么说话」
+    style_preset: str = "modern-conversational"
 
     # ---- 温层（向量库：memory 本地假实现 | qdrant）----
     # 评审用本地 docker：http://qdrant:6333（容器内互联）；开发用云 URL
@@ -57,6 +62,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = "qwen2.5-7b-instruct"
     llm_base_url: str = ""  # openai-compatible 时必填，如 https://api.example.com/v1
+    llm_timeout: float = 120.0  # 单次请求超时（秒）；prompt 较长或生成较长时需放宽
 
     # ---- Embedding（deterministic 本地假实现 | dashscope | siliconflow | openai-compatible）----
     embedding_provider: str = "deterministic"

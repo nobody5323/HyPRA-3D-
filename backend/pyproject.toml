@@ -32,6 +32,11 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["app*"]
 
+# 数据文件（预设/世界书/模型档）随包一起安装，
+# 否则容器内 pip install . 后仅 .py 会被装上，YAML 会丢失
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "presets/*.yaml", "entries/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

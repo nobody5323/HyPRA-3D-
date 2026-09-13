@@ -6,6 +6,7 @@ ChatState 是一轮对话在图中的流转载体：输入 → 中间产物 → 
 
 from typing import TypedDict
 
+from app.llm.profiles import ResolvedSampling
 from app.memory.store import MemoryContext
 from app.session.context import ChatTurn
 from app.tools.emotion import EmotionResult
@@ -24,6 +25,7 @@ class ChatState(TypedDict, total=False):
     history: list[ChatTurn]      # 本次输入之前的既有轮次
     turn_index: int              # 本轮序号（摘要并入用）
     state_vars: dict[str, str]   # 动态状态变量（current_mood 等）
+    style_id: str                # 本轮文风预设 id（缺省用默认档）
 
     # ---- 中间产物（各节点填充）----
     persona_text: str
@@ -40,5 +42,7 @@ class ChatState(TypedDict, total=False):
     # ---- 输出 ----
     reply: str
     emotion: EmotionResult | None   # 本轮情绪判定（结构化输出或兜底）
+    sampling: ResolvedSampling | None  # 本轮实际使用的采样参数（模型档 ⊕ 文风）
+    example_count: int           # 注入的 few-shot 示例组数
     writes: dict[str, int]       # 记忆写入统计
     warnings: list[str]
