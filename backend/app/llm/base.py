@@ -48,13 +48,18 @@ class LLMProvider(ABC):
         *,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> str:
         """给定消息列表生成 assistant 回复文本。
 
         参数:
             messages: system + 历史 + user 的完整消息列表；
             temperature: 采样温度；
-            max_tokens: 回复长度上限（None 用模型默认）。
+            max_tokens: 回复长度上限（None 用模型默认）；
+            top_p / frequency_penalty / presence_penalty: 采样参数
+                （由「模型适配档 ⊕ 文风预设」合并得出，非 None 时才传）。
         """
 
     def chat_with_tools(
@@ -64,6 +69,10 @@ class LLMProvider(ABC):
         *,
         tool_choice: str | dict = "auto",
         temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> list[ToolCall] | None:
         """function calling：请求模型以工具调用形式返回结构化结果。
 

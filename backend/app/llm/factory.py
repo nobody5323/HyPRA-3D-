@@ -23,6 +23,7 @@ def create_llm_provider(
     api_key: str = "",
     model: str = "",
     base_url: str = "",
+    timeout: float = 60.0,
     http_client=None,
 ) -> LLMProvider:
     """按名称创建 LLM provider。
@@ -30,6 +31,7 @@ def create_llm_provider(
     参数:
         provider: mock | dashscope | siliconflow | openai-compatible；
         api_key / model / base_url: 云端接入参数（mock 忽略）；
+        timeout: 单次请求超时（秒）；prompt 长时需放宽；
         http_client: 自定义 httpx 客户端（测试注入用）。
     """
     name = (provider or "mock").strip().lower()
@@ -41,6 +43,7 @@ def create_llm_provider(
             api_key=api_key,
             model=model or "qwen2.5-7b-instruct",
             base_url=base_url or None,
+            timeout=timeout,
             http_client=http_client,
         )
     raise ValueError(f"未知 LLM provider：{provider!r}")

@@ -64,6 +64,9 @@ class MockLLMProvider(LLMProvider):
         *,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> str:
         last_user = next(
             (m.content for m in reversed(messages) if m.role == "user"),
@@ -81,6 +84,10 @@ class MockLLMProvider(LLMProvider):
         *,
         tool_choice: str | dict = "auto",
         temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> list[ToolCall] | None:
         """模拟 function calling：用关键词规则生成结构化结果（回复 + 情绪）。"""
         from app.tools.emotion import EMOTION_TOOL_NAME, extract_emotion_fallback

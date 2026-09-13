@@ -9,10 +9,13 @@
 """
 
 from app.llm.base import ChatMessage, LLMProvider
+from app.llm.profiles import ResolvedSampling, resolve_sampling
 from app.memory.store import MemoryStore
 from app.prompts.assemble import assemble_worldbook_section
 from app.prompts.persona.loader import PersonaPreset
 from app.prompts.renderer import render_persona_prompt
+from app.prompts.style.loader import check_persona_compatibility
+from app.prompts.style.models import StylePreset
 from app.rag.prompt_manager import PromptManager
 from app.graph.state import ChatState
 from app.tools.emotion import (
@@ -37,6 +40,9 @@ class ChatNodes:
         llm_provider: LLMProvider,
         prompt_manager: PromptManager | None = None,
         worldbook_budget: int = 400,
+        styles: dict[str, StylePreset] | None = None,
+        default_style_id: str = "modern-conversational",
+        model_name: str = "",
     ) -> None:
         self.presets = presets
         self.entries = entries
@@ -44,6 +50,10 @@ class ChatNodes:
         self.llm = llm_provider
         self.prompt_manager = prompt_manager or PromptManager()
         self.worldbook_budget = worldbook_budget
+        # 文风预设（与 persona 正交）：未注入时风格层为空（下游可选）
+        self.styles = styles or {}
+        self.default_style_id = default_style_id
+        self.model_name = model_name or getattr(llm_provider, "model", "")
 
     # ---------- 工具 ----------
 
@@ -76,7 +86,6 @@ class ChatNodes:
         }
 
     # ---------- ③ 三层记忆召回 ----------
-
     def memory_recall(self, state: ChatState) -> dict:
         """温层语义召回 + 冷层事实 + 摘要（按预判情绪加权，参照⑤）。
 
@@ -104,8 +113,40 @@ class ChatNodes:
 
     # ---------- ④ 分层组装 ----------
 
+    def _resolve_style(self, state: ChatState) -> tuple[StylePreset | None, list[str]]:
+        """解析本轮风格预设（state.style_id 优先，缺省用默认档），并做一致性校验。"""
+        if not self.styles:
+            return None, []
+        style_id = state.get("style_id") or self.default_style_id
+        style = self.styles.get(style_id)
+        if style is None:
+            return None, [f"未知风格预设「{style_id}」，已跳过风格层"]
+        persona = self.presets.get(state["persona_id"])
+        warnings = check_persona_compatibility(persona, style) if persona else []
+        return style, warnings
+
+    @staticmethod
+    def _compose_style_text(style: StylePreset, style_hint: str) -> str:
+        """风格指令块 = 文风预设指令 + 模型适配档的额外约束。"""
+        parts = [style.instruction_block]
+        if style_hint:
+            parts.append(style_hint)
+        return "\n\n".join(parts)
+
     def assemble_prompt(self, state: ChatState) -> dict:
-        """用 PromptManager 按固定顺序与预算组装完整提示。"""
+        """用 PromptManager 按固定顺序与预算组装完整提示（含风格层与示例对话）。"""
+        style, style_warnings = self._resolve_style(state)
+        sampling: ResolvedSampling | None = None
+        style_text = ""
+        examples: list[tuple[str, str]] = []
+
+        if style is not None:
+            sampling = resolve_sampling(
+                self.model_name, style.sampling, profiles=None
+            )
+            style_text = self._compose_style_text(style, sampling.style_hint)
+            examples = [(e.user, e.assistant) for e in style.examples]
+
         built = self.prompt_manager.build(
             persona_text=state.get("persona_text", ""),
             user_input=state.get("user_input", ""),
@@ -114,26 +155,35 @@ class ChatNodes:
             fact_lines=state.get("fact_lines", []),
             summary_text=state.get("summary_text", ""),
             history=state.get("history", []),
+            style_text=style_text,
+            examples=examples,
         )
         return {
             "system_prompt": built.system_prompt,
             "messages": built.messages,
-            "warnings": self._merge_warnings(state, list(built.warnings)),
+            "sampling": sampling,
+            "style_id": style.id if style else "",
+            "example_count": built.example_count,
+            "warnings": self._merge_warnings(state, [*style_warnings, *built.warnings]),
         }
 
     # ---------- ⑤ LLM 生成 ----------
 
     def generate_reply(self, state: ChatState) -> dict:
-        """生成回复 + 情绪识别（双通道）。
+        """生成回复 + 情绪识别（双通道），并应用「模型档 ⊕ 文风」采样参数。
 
         ① 主通道：function calling 结构化输出（回复 + 情绪标签一并返回）；
         ② 降级：模型不支持工具调用 / 调用失败 → 普通 chat() + 正则兜底情绪。
         两通道都保证给出非空回复与一个情绪结果，绝不空转。
         """
         messages = [ChatMessage(**m) for m in state.get("messages", [])]
+        sampling: ResolvedSampling | None = state.get("sampling")
+        kwargs = sampling.to_provider_kwargs() if sampling is not None else {}
 
         # ① 主通道：结构化输出
-        tool_calls = self.llm.chat_with_tools(messages, [build_emotion_tool()])
+        tool_calls = self.llm.chat_with_tools(
+            messages, [build_emotion_tool()], **kwargs
+        )
         for call in tool_calls or []:
             if call.name != EMOTION_TOOL_NAME:
                 continue
@@ -142,7 +192,7 @@ class ChatNodes:
                 return {"reply": result.reply, "emotion": result}
 
         # ② 降级通道：普通回复 + 兜底情绪（用真实回复替换占位文本）
-        reply = self.llm.chat(messages)
+        reply = self.llm.chat(messages, **kwargs)
         fallback = extract_emotion_fallback(state.get("user_input", ""))
         fallback.reply = reply
         return {"reply": reply, "emotion": fallback}

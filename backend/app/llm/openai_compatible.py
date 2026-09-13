@@ -70,6 +70,9 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> str:
         """调用 chat/completions，返回助手回复文本。"""
         kwargs: dict = {
@@ -77,8 +80,15 @@ class OpenAICompatibleProvider(LLMProvider):
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        # 仅传非 None 的采样参数，避免污染请求（部分端点不接受 None）
+        for key, value in (
+            ("max_tokens", max_tokens),
+            ("top_p", top_p),
+            ("frequency_penalty", frequency_penalty),
+            ("presence_penalty", presence_penalty),
+        ):
+            if value is not None:
+                kwargs[key] = value
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
@@ -92,18 +102,32 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         tool_choice: str | dict = "auto",
         temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> list[ToolCall] | None:
         """function calling（OpenAI tools 协议）。
 
         模型未触发工具调用（如老模型不支持）时返回 None，由调用方降级。
         """
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "temperature": temperature,
+        }
+        for key, value in (
+            ("max_tokens", max_tokens),
+            ("top_p", top_p),
+            ("frequency_penalty", frequency_penalty),
+            ("presence_penalty", presence_penalty),
+        ):
+            if value is not None:
+                kwargs[key] = value
+
+        response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
             return None
         message = response.choices[0].message
