@@ -21,6 +21,7 @@ from app.graph.nodes import ChatNodes
 from app.llm.base import LLMProvider
 from app.llm.factory import create_llm_provider
 from app.memory.cold.extractor import create_extractor
+from app.memory.cold.mood_log import SqliteMoodLogStore
 from app.memory.cold.sqlite_store import SqliteColdStore
 from app.memory.store import MemoryStore
 from app.memory.warm.factory import create_warm_store
@@ -30,6 +31,7 @@ from app.prompts.style.loader import load_builtin_styles
 from app.rag.prompt_manager import PromptManager
 from app.session.context import ChatTurn
 from app.session.repository import SessionRepository
+from app.tools.builtin_tools import build_default_registry
 from app.worldbook.loader import load_builtin_entries
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -40,6 +42,7 @@ _presets = load_builtin_presets()
 _entries = load_builtin_entries()
 _styles = load_builtin_styles()
 _memory_store: MemoryStore | None = None
+_mood_store = None
 _llm_provider: LLMProvider | None = None
 _chat_graph = None
 
@@ -75,6 +78,22 @@ def set_memory_store(store: MemoryStore | None) -> None:
     """替换/重置记忆门面（同时失效已编译的图）。"""
     global _memory_store, _chat_graph
     _memory_store = store
+    _chat_graph = None
+
+
+def get_mood_store():
+    """懒加载情绪日记库（Agent 工具用）。"""
+    global _mood_store
+    if _mood_store is None:
+        settings = get_settings()
+        _mood_store = SqliteMoodLogStore(db_path=settings.cold_db_path)
+    return _mood_store
+
+
+def set_mood_store(store) -> None:
+    """替换/重置情绪日记库（测试注入用）。"""
+    global _mood_store, _chat_graph
+    _mood_store = store
     _chat_graph = None
 
 
@@ -121,6 +140,9 @@ def get_chat_graph():
             styles=_styles,
             default_style_id=settings.style_preset,
             model_name=settings.llm_model,
+            tool_registry=build_default_registry() if settings.agent_tools_enabled else None,
+            mood_store=get_mood_store() if settings.agent_tools_enabled else None,
+            max_tool_rounds=settings.max_tool_rounds,
         )
         _chat_graph = build_chat_graph(nodes)
     return _chat_graph
@@ -172,6 +194,10 @@ class ChatResponse(BaseModel):
     speak: dict[str, object] = Field(
         default_factory=dict,
         description="数字人播报指令（SSML + 字幕 + 音色），供前端 SDK 播报",
+    )
+    tools_used: list[dict] = Field(
+        default_factory=list,
+        description="本轮 Agent 调用的工具记录（名称/参数/结果），供前端展示「已办事」",
     )
     note: str = Field(description="编排方式与运行模式说明")
 
@@ -292,6 +318,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         estimated_tokens=estimate_tokens(system_prompt),
         style=style_meta,
         speak=speak_meta,
+        tools_used=result.get("tools_used", []),
         note=(
             f"LangGraph 编排（6 节点）；模型 {get_llm_provider().name}；"
             f"向量库 {settings.warm_backend}；情绪链路已启用；"

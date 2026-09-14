@@ -13,6 +13,7 @@ from app.api import chat as chat_module
 from app.api import media as media_module
 from app.digital_human.local_provider import LocalDigitalHumanProvider
 from app.llm.mock import MockLLMProvider
+from app.memory.cold.mood_log import SqliteMoodLogStore
 from app.memory.cold.sqlite_store import SqliteColdStore
 from app.memory.store import MemoryStore
 from app.memory.warm.inmemory_store import InMemoryWarmStore
@@ -26,9 +27,11 @@ def isolated_chat_dependencies(tmp_path):
         InMemoryWarmStore(),
     )
     chat_module.set_memory_store(store)
+    chat_module.set_mood_store(SqliteMoodLogStore(db_path=tmp_path / "mood.db"))
     chat_module.set_llm_provider(MockLLMProvider())
     media_module.set_digital_human_provider(LocalDigitalHumanProvider())
     yield store
     chat_module.set_memory_store(None)
+    chat_module.set_mood_store(None)
     chat_module.set_llm_provider(None)
     media_module.set_digital_human_provider(None)

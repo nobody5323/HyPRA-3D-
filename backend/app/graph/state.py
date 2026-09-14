@@ -44,5 +44,6 @@ class ChatState(TypedDict, total=False):
     emotion: EmotionResult | None   # 本轮情绪判定（结构化输出或兜底）
     sampling: ResolvedSampling | None  # 本轮实际使用的采样参数（模型档 ⊕ 文风）
     example_count: int           # 注入的 few-shot 示例组数
+    tools_used: list[dict]       # 本轮实际调用过的工具记录（Agent 行动层）
     writes: dict[str, int]       # 记忆写入统计
     warnings: list[str]

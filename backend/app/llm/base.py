@@ -10,6 +10,7 @@ provider 通过工厂按配置创建（factory.py）：
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -33,6 +34,20 @@ class ToolCall:
     name: str          # 工具名
     arguments: str     # 参数（JSON 字符串，由调用方解析）
     call_id: str = ""  # 工具调用 id（多轮工具对话时需要回传）
+
+
+@dataclass
+class AgentResult:
+    """一次 Agent 工具循环的结果。"""
+
+    reply: str = ""                        # 最终回复文本（纯文本通道）
+    emotion_call: str | None = None        # 终止工具（如情绪工具）的原始参数 JSON
+    tool_calls: list[dict] = None          # 实际执行过的工具记录 [{name, arguments, result}]
+    rounds: int = 0                        # 实际发生的 LLM 调用轮数
+
+    def __post_init__(self) -> None:
+        if self.tool_calls is None:
+            self.tool_calls = []
 
 
 class LLMProvider(ABC):
@@ -62,6 +77,34 @@ class LLMProvider(ABC):
                 （由「模型适配档 ⊕ 文风预设」合并得出，非 None 时才传）。
         """
 
+    def chat_with_tool_loop(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        executor: "Callable[[str, str], str]",
+        *,
+        final_tool: str | None = None,
+        max_rounds: int = 2,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+    ) -> AgentResult:
+        """Agent 工具循环：模型可多轮调用工具，直到给出最终回复或调用终止工具。
+
+        参数:
+            tools: OpenAI tools 格式的工具列表；
+            executor: 工具执行器 (name, arguments_json) -> 结果文本；
+            final_tool: 终止工具名（如情绪工具）——一旦被调用即结束循环，
+                其原始参数存入 AgentResult.emotion_call；
+            max_rounds: 工具调用轮数上限（防止死循环）。
+
+        默认实现：本 provider 不支持工具调用 → 退化为普通对话。
+        支持 function calling 的 provider（如 OpenAI 兼容实现）覆盖本方法。
+        """
+        return AgentResult(reply=self.chat(messages, temperature=temperature), rounds=0)
+
     def chat_with_tools(
         self,
         messages: list[ChatMessage],
@@ -74,7 +117,7 @@ class LLMProvider(ABC):
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
     ) -> list[ToolCall] | None:
-        """function calling：请求模型以工具调用形式返回结构化结果。
+        """单轮 function calling：请求模型以工具调用形式返回结构化结果。
 
         返回:
             工具调用列表；模型未触发工具调用或本 provider 不支持时返回 None

@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_base_url: str = ""
 
+    # ---- Agent 行动层（P1）----
+    agent_tools_enabled: bool = True   # 是否启用工具调用（情绪日记/趋势/呼吸引导/记忆检索）
+    max_tool_rounds: int = 2           # 工具调用轮数上限（防死循环）
+
     # ---- 数字人驱动（M5）----
     digital_human_provider: str = "local"   # local（零依赖降级）| xmov（魔珐星云）
     xmov_app_id: str = ""                    # 魔珐控制台「密钥管理」获取
