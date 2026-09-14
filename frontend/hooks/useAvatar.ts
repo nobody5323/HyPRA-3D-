@@ -57,6 +57,9 @@ const XMOV_SDK_URL =
   "https://media.xingyun3d.com/xingyun3d/general/litesdk/xmovAvatar@latest.js";
 const XMOV_GATEWAY = "https://nebula-agent.xingyun3d.com/user/v1/ttsa/session";
 
+/** 初始化超时（毫秒）：资源下载或 socket.io 连接卡住时兜底，避免永久“初始化中” */
+const INIT_TIMEOUT_MS = 90_000;
+
 // =============================================================
 // 实现一：浏览器原生 TTS（零依赖，默认）
 // =============================================================
@@ -203,6 +206,8 @@ export function useXmovAvatar(
     let disposed = false;
 
     (async () => {
+      // 提到 try 外：失败时需销毁实例（超时/鉴权失败等）
+      let avatar: any = null;
       try {
         setStage("loading-sdk");
         setDetail(`正在加载 SDK 脚本…（${XMOV_SDK_URL.split("/").pop()}）`);
@@ -229,10 +234,18 @@ export function useXmovAvatar(
           gatewayServer: XMOV_GATEWAY,
           hardwareAcceleration: "prefer-hardware",
 
-          /** 资源加载进度（构造期兜底；真正必需的是 init() 的同名参数） */
+          /** 资源加载进度（必需参数）：达到 100% 即视为就绪，不阻塞在 init 的 Promise 上 */
           onDownloadProgress: (progress: number) => {
-            setStage("initializing");
-            setDetail(`正在加载数字人资源… ${Math.round(progress)}%`);
+            const pct = Math.round(progress);
+            console.log(`[HyPRA][avatar] 资源加载 ${pct}%`);
+            if (pct >= 99) {
+              setStage("ready");
+              setReady(true);
+              setDetail("魔珐数字人已就绪");
+            } else {
+              setStage("initializing");
+              setDetail(`正在加载数字人资源… ${pct}%`);
+            }
           },
           /** SDK 状态 → 具身状态机（speak / idle 等） */
           onStateChange: (sdkState: string) => {
@@ -260,7 +273,11 @@ export function useXmovAvatar(
         };
         if (element) config.container = element;
 
-        const avatar = new (window as any).XmovAvatar(config);
+        const avatarInstance = new (window as any).XmovAvatar(config);
+        avatar = avatarInstance;
+        // ⚠️ 提前挂载引用：init() 可能因会话握手较慢而长时间未 resolve，
+        // 但渲染与播报已可用——否则 speak() 会因 avatarRef 为空而静默失效（没声音）。
+        avatarRef.current = avatarInstance;
 
         // 语音状态 → 驱动具身状态机（voice_end 后回到交互待机）
         const handleVoiceState = (event: unknown) => {
@@ -283,17 +300,46 @@ export function useXmovAvatar(
           onUnavailable?.(reason);
         };
 
-        await avatar.init({
-          // ⚠️ 官方文档「1.3 初始化连接房间」参数表明确：onDownloadProgress 为**必填**
-          // （init 的参数，非构造参数）；源码中为无条件调用，缺失即抛 TypeError。
-          // 文档补充：首次连接 bin 资源或首个视频资源加载失败时进度不会到 100，
-          // 此时 SDK 内部会调用 stopSession（因此该回调也是重连逻辑的一部分）。
-          onDownloadProgress: (progress: number) => {
-            setStage("initializing");
-            setDetail(`正在加载数字人资源… ${Math.round(progress)}%`);
-          },
-          initModel: "normal",
+        // ⚠️ 官方文档「1.3 初始化连接房间」参数表明确：onDownloadProgress 为**必填**
+        // （init 的参数，非构造参数）；源码中为无条件调用，缺失即抛 TypeError。
+        //
+        // 额外加超时保护：资源下载或 socket.io 连接卡住时，避免永久停在“初始化中”。
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `初始化超时（${INIT_TIMEOUT_MS / 1000}s）：资源加载或服务连接未完成`,
+                ),
+              ),
+            INIT_TIMEOUT_MS,
+          );
         });
+
+        try {
+          await Promise.race([
+            avatar.init({
+              onDownloadProgress: (progress: number) => {
+                const pct = Math.round(progress);
+                console.log(`[HyPRA][avatar] init 进度 ${pct}%`);
+                if (pct >= 99) {
+                  // 资源已就绪：即使 init Promise 仍在等待会话握手，界面也先转为可用
+                  setStage("ready");
+                  setReady(true);
+                  setDetail("魔珐数字人已就绪");
+                } else {
+                  setStage("initializing");
+                  setDetail(`正在加载数字人资源… ${pct}%`);
+                }
+              },
+              initModel: "normal",
+            }),
+            timeoutPromise,
+          ]);
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
         if (initError) return; // 初始化已失败并在 onMessage 中上报（init 仍会 resolve）
         if (disposed) {
           avatar.destroy?.();
@@ -309,6 +355,7 @@ export function useXmovAvatar(
         setStage("failed");
         setDetail(`数字人初始化失败：${reason}`);
         setReady(false);
+        avatar?.destroy?.(); // 清理失败的实例（避免 WebGL 资源泄漏）
         onUnavailable?.(reason);
       }
     })();
