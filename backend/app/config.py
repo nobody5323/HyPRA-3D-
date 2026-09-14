@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
 
+    # ---- CORS（前端跨域访问）----
+    # 逗号分隔的允许来源；"*" 表示允许全部（仅建议本地/内网演示使用）
+    # 默认覆盖本地开发（Next.js 3000）与 docker 部署场景
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000"
+    )
+
     # ---- 冷层（本地 SQLite）----
     # 数据库文件位置（相对 backend 运行目录；默认 backend/data/memory.db）
     cold_db_path: str = "data/memory.db"
@@ -87,3 +95,11 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """返回单例配置（FastAPI 依赖注入用）。"""
     return Settings()
+
+
+def cors_origin_list(settings: Settings) -> list[str]:
+    """把逗号分隔的 CORS 配置解析为列表（支持 "*" 通配）。"""
+    raw = (settings.cors_origins or "").strip()
+    if raw == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
