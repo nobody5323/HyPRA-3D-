@@ -14,6 +14,7 @@ import {
   type CredentialSource,
   clearCredentials,
   getEffectiveCredentials,
+  getInitialCredentials,
   saveCredentials,
   subscribeCredentials,
 } from "@/lib/avatar-config";
@@ -22,16 +23,23 @@ export interface AvatarCredentialsState {
   credentials: AvatarCredentials | null;
   source: CredentialSource;
   configured: boolean;
+  /** 配置修订号：每次保存/清除 +1（即使内容相同），用于触发重新连接 */
+  revision: number;
   save: (credentials: AvatarCredentials) => void;
   clear: () => void;
 }
 
 export function useAvatarCredentials(): AvatarCredentialsState {
-  const [snapshot, setSnapshot] = useState(() => getEffectiveCredentials());
+  // 首屏用「不读 localStorage」的安全值（避免 hydration 不一致），挂载后再读真实配置
+  const [snapshot, setSnapshot] = useState(() => getInitialCredentials());
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     setSnapshot(getEffectiveCredentials()); // 挂载后读取 localStorage
-    return subscribeCredentials(() => setSnapshot(getEffectiveCredentials()));
+    return subscribeCredentials(() => {
+      setSnapshot(getEffectiveCredentials());
+      setRevision((prev) => prev + 1); // 即使内容不变也触发重连（如点「重新连接」）
+    });
   }, []);
 
   // 稳定引用：仅在凭证内容变化时更新（便于作为 effect 依赖）
@@ -45,6 +53,7 @@ export function useAvatarCredentials(): AvatarCredentialsState {
     credentials,
     source: snapshot.source,
     configured: Boolean(credentials),
+    revision,
     save: saveCredentials,
     clear: clearCredentials,
   };

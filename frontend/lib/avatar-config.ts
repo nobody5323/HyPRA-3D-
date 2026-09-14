@@ -72,6 +72,21 @@ export function getEffectiveCredentials(): {
   return { credentials: null, source: "none" };
 }
 
+/**
+ * 首屏安全值（**不读 localStorage**）。
+ *
+ * 必须与服务端渲染保持一致，否则 SSR/CSR 内容不一致会触发 hydration 错误：
+ * 服务端读不到 localStorage，若客户端首屏就读，两者渲染结果会不同。
+ * 因此首屏只用环境变量，localStorage 在挂载后再读取（见 useAvatarCredentials）。
+ */
+export function getInitialCredentials(): {
+  credentials: AvatarCredentials | null;
+  source: CredentialSource;
+} {
+  if (isComplete(ENV_CREDENTIALS)) return { credentials: ENV_CREDENTIALS, source: "env" };
+  return { credentials: null, source: "none" };
+}
+
 /** 保存界面填写的凭证（并通知订阅者）。 */
 export function saveCredentials(credentials: AvatarCredentials): void {
   if (typeof window === "undefined") return;

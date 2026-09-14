@@ -10,6 +10,9 @@
  * 两种模式共享同一套外部 UI（状态徽标、角色名、提示），便于演示时无缝切换。
  */
 
+import type { RefObject } from "react";
+
+import type { AvatarInitStage } from "@/hooks/useAvatar";
 import type { AvatarState, EmotionInfo } from "@/lib/types";
 import { StateBadge } from "./StateBadge";
 
@@ -29,17 +32,22 @@ export function AvatarStage({
   emotion,
   provider,
   containerId = "avatar-container",
-  notice,
+  containerRef,
+  stage = "ready",
+  detail = "",
 }: {
   state: AvatarState;
   emotion: EmotionInfo | null;
   provider: "browser" | "xmov";
   containerId?: string;
-  notice?: string | null;
+  containerRef?: RefObject<HTMLDivElement | null>;
+  stage?: AvatarInitStage;
+  detail?: string;
 }) {
   const color = MOOD_COLOR[emotion?.label ?? "neutral"] ?? MOOD_COLOR.neutral;
   const intensity = emotion?.intensity ?? 0.5;
   const isXmov = provider === "xmov";
+  const loading = isXmov && (stage === "loading-sdk" || stage === "initializing");
 
   return (
     <section className="relative flex flex-col items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60 p-6">
@@ -58,9 +66,18 @@ export function AvatarStage({
           /* 魔珐 SDK 挂载容器（真实 3D 渲染） */
           <div
             id={containerId}
+            ref={containerRef}
             className="h-[420px] w-full overflow-hidden rounded-xl bg-slate-950/40"
             aria-label="魔珐数字人渲染容器"
-          />
+          >
+            {loading && (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center">
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-sky-400/40 border-t-sky-400" />
+                <p className="text-sm text-slate-200">正在初始化数字人…</p>
+                <p className="px-6 text-[11px] text-slate-500">{detail}</p>
+              </div>
+            )}
+          </div>
         ) : (
           /* 占位形象（零依赖降级） */
           <div
@@ -95,7 +112,6 @@ export function AvatarStage({
         <p className="text-[11px] text-slate-500">
           {isXmov ? "渲染：魔珐星云具身驱动 SDK" : "渲染：占位形象（配置密钥后自动切换真实数字人）"}
         </p>
-        {notice && <p className="text-[11px] text-amber-400/80">{notice}</p>}
       </div>
     </section>
   );

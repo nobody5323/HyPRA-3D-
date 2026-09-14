@@ -10,7 +10,7 @@
  * 凭证可在页面上直接填写（存 localStorage，即时生效，无需重新构建）。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AvatarSettings } from "@/components/AvatarSettings";
 import { AvatarStage } from "@/components/AvatarStage";
@@ -23,24 +23,33 @@ import { useAvatarCredentials } from "@/hooks/useAvatarCredentials";
 import { useChatSession } from "@/hooks/useChatSession";
 import { getHealth } from "@/lib/api";
 
-const CONTAINER_ID = "avatar-container";
+const CONTAINER_ID = "avatar-container"; // 用于 DOM 元素的 id
+const CONTAINER_SELECTOR = "#avatar-container"; // 传给 SDK 的 CSS 选择器（兜底）
 
 export default function HomePage() {
-  const { credentials, source, configured } = useAvatarCredentials();
+  const { credentials, source, configured, revision } = useAvatarCredentials();
   const [provider, setProvider] = useState<"xmov" | "browser">("browser");
+  const [avatarError, setAvatarError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   // 凭证可用性变化 → 切换渲染方式（配置好即启用真实数字人）
   useEffect(() => {
     setProvider(credentials ? "xmov" : "browser");
-  }, [credentials]);
+    if (credentials) setAvatarError(null); // 重新配置后清掉旧错误
+  }, [credentials, revision]);
 
   const browserAvatar = useBrowserAvatar();
-  const xmovAvatar = useXmovAvatar(CONTAINER_ID, {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const xmovAvatar = useXmovAvatar(CONTAINER_SELECTOR, {
     credentials,
     enabled: provider === "xmov",
-    onUnavailable: () => setProvider("browser"),
+    revision,
+    containerRef,
+    onUnavailable: (reason) => {
+      setAvatarError(reason); // 保留失败原因（降级后仍可见）
+      setProvider("browser");
+    },
   });
   const avatar = provider === "xmov" ? xmovAvatar : browserAvatar;
 
@@ -107,9 +116,24 @@ export default function HomePage() {
             emotion={session.emotion}
             provider={avatar.provider}
             containerId={CONTAINER_ID}
-            notice={source === "none" && !configured ? null : avatar.notice}
+            containerRef={containerRef}
+            stage={avatar.provider === "xmov" ? xmovAvatar.stage : "ready"}
+            detail={avatar.provider === "xmov" ? xmovAvatar.detail : ""}
           />
           <SubtitleBar text={session.subtitle} active={avatar.state === "speak"} />
+
+          {/* 数字人失败原因（不因降级而丢失，便于现场排查） */}
+          {avatarError && (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
+              <p className="font-medium">数字人未启用：{avatarError}</p>
+              <p className="mt-1 leading-relaxed text-rose-200/70">
+                已自动降级为浏览器语音（对话 / 字幕 / 情绪均不受影响）。常见原因：
+                密钥不是「驱动应用」的、应用未完成配置、或网络无法访问魔珐服务。
+                修正后点击右上角设置重新保存即可重连。
+              </p>
+            </div>
+          )}
+
           {!configured && (
             <p className="text-center text-[11px] text-slate-500">
               当前使用浏览器语音演示。点击右上角「配置数字人密钥」可启用真实 3D 数字人。
