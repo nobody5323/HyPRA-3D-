@@ -14,7 +14,9 @@ npm run dev                       # http://localhost:3000
 > 需要先启动后端（`cd backend && ../.venv/Scripts/python -m uvicorn app.main:app --reload`），
 > 页面顶部会显示「后端在线 / 未连接」。
 
-## 已实现（F1）
+## 已实现
+
+### F1：对话产品化
 
 | 能力 | 说明 |
 |---|---|
@@ -27,11 +29,29 @@ npm run dev                       # http://localhost:3000
 | 播报 | 浏览器原生 TTS（零依赖，F1 占位实现） |
 | 打断 | 客户端即时打断（中止请求 + 停止播报） |
 
-## 待实现（F2）
+### F2：魔珐具身驱动 SDK 集成
 
-- 接入**魔珐具身驱动 SDK**（`XmovAvatar`），替换 `useBrowserAvatar` 为 `useXmovAvatar`
-  → 详见 [`docs/frontend-avatar-integration.md`](../docs/frontend-avatar-integration.md)
-- 断线重连与降级演示（弱网）
+| 能力 | 说明 |
+|---|---|
+| **真实 3D 数字人** | 动态加载 `xmovAvatar.js`，SDK 挂载到 `#avatar-container` |
+| **SSML 播报** | 把后端 `speak.ssml`（含 KA 动作）交给 `avatar.speak(ssml, true, true)` |
+| 语音状态联动 | 监听 `onVoiceStateChange`（voice_start/voice_end）驱动状态机 |
+| **自动降级** | 未配置密钥 / 脚本加载失败 / init 失败 → 回退**浏览器 TTS + 占位形象**，演示不中断 |
+| 资源释放 | 卸载时调用 `avatar.destroy()`（释放 WebGL 资源） |
+
+**配置方式**：在 `frontend/.env.local` 填入魔珐**驱动应用**密钥（留空即使用浏览器 TTS）：
+
+```ini
+NEXT_PUBLIC_XMOV_APP_ID=你的AppID
+NEXT_PUBLIC_XMOV_APP_SECRET=你的AppSecret
+```
+
+> 页面右上角显示当前渲染方式（「魔珐 SDK」/「浏览器 TTS」）。
+
+## 待实现
+
+- 断线重连（弱网演示）与更细的 SDK 错误提示
+- 多模态 Widget 展示（图片 / 字幕组件）
 
 ## 目录
 

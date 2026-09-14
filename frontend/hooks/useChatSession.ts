@@ -70,8 +70,8 @@ export function useChatSession(avatar: AvatarController, userName = "小林"): C
         setTone(res.speak?.tone ?? "");
         setMemoryCounts(res.memory_counts ?? {});
 
-        avatar.setState("speak"); // ③ 播报
-        await avatar.speak(res.speak?.display_text || res.reply);
+        avatar.setState("speak"); // ③ 播报（文本给浏览器 TTS，SSML 给魔珐 SDK）
+        await avatar.speak(res.speak?.display_text || res.reply, res.speak?.ssml);
         avatar.setState("idle"); // ④ 回到待机
       } catch (err) {
         if ((err as Error).name === "AbortError") {
