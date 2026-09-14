@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5-7b-instruct"
     llm_base_url: str = ""  # openai-compatible 时必填，如 https://api.example.com/v1
     llm_timeout: float = 120.0  # 单次请求超时（秒）；prompt 较长或生成较长时需放宽
+    # 推理模型开关：qwen3 等推理模型默认会先生成大量思考 token（实测慢 4-5 倍），
+    # 情感陪伴场景不需要长思考，默认关闭（None = 不传该参数，兼容非推理模型）
+    llm_enable_thinking: bool = False
 
     # ---- Embedding（deterministic 本地假实现 | dashscope | siliconflow | openai-compatible）----
     embedding_provider: str = "deterministic"

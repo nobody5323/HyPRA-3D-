@@ -14,6 +14,7 @@ from app.memory.store import MemoryStore
 from app.prompts.assemble import assemble_worldbook_section
 from app.prompts.persona.loader import PersonaPreset
 from app.prompts.renderer import render_persona_prompt
+from app.prompts.sanitize import sanitize_reply
 from app.prompts.style.loader import check_persona_compatibility
 from app.prompts.style.models import StylePreset
 from app.rag.prompt_manager import PromptManager
@@ -227,10 +228,12 @@ class ChatNodes:
         if agent.emotion_call:
             result = parse_emotion_result(agent.emotion_call)
             if result is not None:
+                # 兜底清理：剔除 markdown/emoji 与模型的元评论（自我纠正）
+                result.reply = sanitize_reply(result.reply)
                 return {"reply": result.reply, "emotion": result, "tools_used": tools_used}
 
         # ② 降级通道：普通回复 + 兜底情绪（用真实回复替换占位文本）
-        reply = agent.reply or self.llm.chat(messages, **kwargs)
+        reply = sanitize_reply(agent.reply or self.llm.chat(messages, **kwargs))
         fallback = extract_emotion_fallback(state.get("user_input", ""))
         fallback.reply = reply
         return {"reply": reply, "emotion": fallback, "tools_used": tools_used}

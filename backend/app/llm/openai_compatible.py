@@ -34,6 +34,7 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str | None = None,
         timeout: float = 60.0,
         max_retries: int = 2,
+        enable_thinking: bool | None = None,
         http_client=None,
     ) -> None:
         """初始化。
@@ -56,6 +57,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
         self.name = name
         self.model = model
+        # None = 不传该参数（兼容非推理模型）；False = 关闭思考（推理模型提速）
+        self._enable_thinking = enable_thinking
         self._client = OpenAI(
             api_key=api_key,
             base_url=resolved_base,
@@ -63,6 +66,12 @@ class OpenAICompatibleProvider(LLMProvider):
             max_retries=max_retries,
             http_client=http_client,
         )
+
+    def _extra_body(self) -> dict | None:
+        """非标准参数（如推理模型的思考开关）。None 时不传，避免影响普通模型。"""
+        if self._enable_thinking is None:
+            return None
+        return {"enable_thinking": self._enable_thinking}
 
     def chat(
         self,
@@ -89,6 +98,9 @@ class OpenAICompatibleProvider(LLMProvider):
         ):
             if value is not None:
                 kwargs[key] = value
+        extra_body = self._extra_body()
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
@@ -132,6 +144,9 @@ class OpenAICompatibleProvider(LLMProvider):
             ):
                 if value is not None:
                     kwargs[key] = value
+            extra_body = self._extra_body()
+            if extra_body is not None:
+                kwargs["extra_body"] = extra_body
             return kwargs
 
         for round_index in range(max_rounds):
@@ -258,6 +273,9 @@ class OpenAICompatibleProvider(LLMProvider):
         ):
             if value is not None:
                 kwargs[key] = value
+        extra_body = self._extra_body()
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:

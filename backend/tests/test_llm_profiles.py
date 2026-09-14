@@ -86,4 +86,13 @@ def test_to_provider_kwargs_skips_none() -> None:
 
 def test_default_profile_has_hint(profiles) -> None:
     resolved = resolve_sampling("unknown", None, profiles)
-    assert "列点" in resolved.style_hint or "客套" in resolved.style_hint
+    # 默认档应强调「纯文字 + 不输出思考过程」（避免格式标记与自我纠正泄漏）
+    assert "纯文字" in resolved.style_hint
+    assert "emoji" in resolved.style_hint
+
+
+def test_qwen_profile_hint_forbids_meta_comment(profiles) -> None:
+    """Qwen 档的附加约束应明确禁止把思考/自我纠正写进回复（实测发生的问题）。"""
+    resolved = resolve_sampling("qwen3.7-flash-2026-07-15", None, profiles)
+    assert "自我纠正" in resolved.style_hint
+    assert "元评论" in resolved.style_hint

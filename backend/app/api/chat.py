@@ -108,6 +108,7 @@ def get_llm_provider() -> LLMProvider:
             model=settings.llm_model,
             base_url=settings.llm_base_url,
             timeout=settings.llm_timeout,
+            enable_thinking=settings.llm_enable_thinking,
         )
     return _llm_provider
 

@@ -16,8 +16,9 @@ profiles:
     presence_penalty: 0.1
     max_tokens: 400             # 防长篇大论（文风预设可覆盖）
     style_hint: |
-      不要使用 markdown 语法（标题、加粗、列表、分隔线），也不要用 emoji；
-      直接说人话，不要写"首先/其次/总之"这类结构词。
+      用纯文字说话：不使用任何格式标记（加粗、列表、标题、分隔线），也不使用表情符号与 emoji。
+      只输出对用户说的话；不要把思考过程、规则检查、自我纠正或“（注：…）”
+      这类元评论写进回复（例如不要写“虽然不能加 emoji”“已按要求修正”）。
 
   - id: deepseek
     match: ["deepseek"]
@@ -26,7 +27,8 @@ profiles:
     frequency_penalty: 0.35
     max_tokens: 400
     style_hint: |
-      避免分点罗列与总结式结尾；不要使用 emoji 与 markdown 列表。
+      用纯文字说话：不使用格式标记（加粗、列表、标题）与 emoji；
+      只输出对用户说的话，不要把思考过程或自我纠正写进回复。
 
   - id: default
     match: ["*"]
@@ -35,4 +37,5 @@ profiles:
     frequency_penalty: 0.3
     max_tokens: 400
     style_hint: |
-      避免列点式表达、客套收尾与说教口吻。
+      用纯文字说话：不使用格式标记（列表、加粗、标题）与 emoji；
+      只输出对用户说的话，不要把思考过程、规则引用或自我纠正写进回复。
