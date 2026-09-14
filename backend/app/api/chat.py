@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.digital_human.ssml import build_speak_command
 from app.graph.chat_graph import build_chat_graph
 from app.graph.nodes import ChatNodes
 from app.llm.base import LLMProvider
@@ -168,6 +169,10 @@ class ChatResponse(BaseModel):
         default_factory=dict,
         description="本轮文风与采样：style_id/style_name/examples/sampling",
     )
+    speak: dict[str, object] = Field(
+        default_factory=dict,
+        description="数字人播报指令（SSML + 字幕 + 音色），供前端 SDK 播报",
+    )
     note: str = Field(description="编排方式与运行模式说明")
 
 
@@ -237,6 +242,18 @@ def chat(req: ChatRequest) -> ChatResponse:
     system_prompt = result.get("system_prompt", "")
     sampling = result.get("sampling")
     used_style_id = result.get("style_id", "")
+
+    # 数字人播报指令：回复 + 本轮情绪 → SSML（供前端 SDK speak() 播报）
+    speak_meta: dict[str, object] = {}
+    if settings.avatar_enabled and reply:
+        command = build_speak_command(
+            reply,
+            emotion=emotion.emotion.value if emotion is not None else None,
+            intensity=emotion.intensity if emotion is not None else 0.5,
+            voice=settings.xmov_voice,
+        )
+        speak_meta = command.to_dict()
+
     style_meta: dict[str, object] = {}
     if used_style_id:
         preset = _styles.get(used_style_id)
@@ -274,6 +291,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         warnings=result.get("warnings", []),
         estimated_tokens=estimate_tokens(system_prompt),
         style=style_meta,
+        speak=speak_meta,
         note=(
             f"LangGraph 编排（6 节点）；模型 {get_llm_provider().name}；"
             f"向量库 {settings.warm_backend}；情绪链路已启用；"

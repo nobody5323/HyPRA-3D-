@@ -14,7 +14,7 @@ HyPRA：打通「提示词架构」与「混合记忆」的情感陪伴 3D 交�
 - 后端：Python + FastAPI + LangChain / LangGraph
 - 记忆：**Qdrant 向量库（双模式：本地 Docker 优先，云可切）**（温层向量库，经 `WarmMemoryStore` 接口抽象接入；开发可用云，评审用 docker compose 本地部署）+ SQLite/JSON（冷层结构化）+ 内存滚动窗口（热层）
 - 模型：Qwen2.5-7B 等开源模型，走国内托管 API（阿里百炼 / 硅基流动）
-- 多模态：魔珐星云 SDK（数字人）+ TTS（语音合成）→ MP4 / 语音文件
+- 多模态：魔珐星云具身驱动 SDK（数字人实时渲染）+ SSML 播报指令（KA 动作）→ 前端 `speak()` 驱动
 - 前端：React / Next.js（对话 UI + 数字人视频播放），App Router
 - 情绪输出：function calling 结构化输出为主，正则仅作兜底
 
@@ -52,7 +52,7 @@ HyPRA：打通「提示词架构」与「混合记忆」的情感陪伴 3D 交�
 - 情绪链路：LLM 回复必须走 function calling 结构化输出（情绪标签 + 字段）；正则提取仅兜底。
   情绪标签同时驱动 3D 表情联动与记忆加权。
 - RAG 拼接优先级（PromptManager 固定顺序）：世界书触发 > 向量召回 > 结构化事实 > 摘要 > 滚动窗口。
-- 数字人：文本 + 情绪标签 → 魔珐星云 API → MP4/语音 → 前端播放。
+- 数字人：文本 + 情绪标签 → SSML 播报指令（含 KA 动作）→ 魔珐星云具身驱动 SDK（前端实时渲染）。
 
 ## 5. 开发与验证
 

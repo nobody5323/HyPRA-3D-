@@ -1,0 +1,76 @@
+name: CI
+
+# 赛题「开源规范 - 工程规范」要求：提交记录规范 + CI/CD 配置。
+# 本工作流在每次 push / PR 时运行后端测试（全离线，无需任何密钥）。
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: 后端测试（pytest，离线）
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: 安装依赖
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: 运行测试
+        working-directory: backend
+        run: pytest -q
+
+      - name: 校验配置文件可加载（配置项脱敏检查）
+        working-directory: backend
+        run: |
+          python -c "
+          from app.config import Settings
+          s = Settings(_env_file=None)
+          print('默认配置加载正常：provider=%s / vector=%s / avatar=%s' % (s.llm_provider, s.warm_backend, s.digital_human_provider))
+          "
+
+  repo-hygiene:
+    name: 仓库卫生（密钥与产物不入库）
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 检查敏感文件与产物未被跟踪
+        run: |
+          set -e
+          failed=0
+          # 这些路径/类型一旦被 git 跟踪，说明 .gitignore 失效或误提交
+          for pattern in "backend/.env" ".env" "*.db" "*.sqlite" "*.mp4" "*.mp3" "*.wav" "*.pem" "*.key"; do
+            files=$(git ls-files -- "$pattern")
+            if [ -n "$files" ]; then
+              echo "::error::敏感/产物文件被跟踪（模式 $pattern）：$files"
+              failed=1
+            fi
+          done
+          # 目录型路径：不应有被跟踪的产物文件
+          for dir in "backend/data" "backend/media" "summaries"; do
+            files=$(git ls-files -- "$dir")
+            if [ -n "$files" ]; then
+              echo "::error::目录应当被忽略但存在被跟踪文件：$dir → $files"
+              failed=1
+            fi
+          done
+          if [ $failed -ne 0 ]; then exit 1; fi
+          echo "未发现被跟踪的密钥或产物文件 ✅"

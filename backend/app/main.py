@@ -1,11 +1,11 @@
 """HyPRA 后端入口：FastAPI 应用工厂 + 健康检查。
 
-后续按模块拆分路由（chat / memory / media），在此统一注册到 app。
+路由按模块拆分（chat / media），在此统一注册到 app。
 """
 
 from fastapi import FastAPI
 
-from app.api import chat_router
+from app.api import chat_router, media_router
 from app.config import get_settings
 
 
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "app": settings.app_name}
 
     app.include_router(chat_router)
+    app.include_router(media_router)
     return app
 
 
