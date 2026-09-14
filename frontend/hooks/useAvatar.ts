@@ -222,7 +222,7 @@ export function useXmovAvatar(
           gatewayServer: XMOV_GATEWAY,
           hardwareAcceleration: "prefer-hardware",
 
-          /** 资源加载进度（必需回调，同时用于展示初始化进度） */
+          /** 资源加载进度（构造期兜底；真正必需的是 init() 的同名参数） */
           onDownloadProgress: (progress: number) => {
             setStage("initializing");
             setDetail(`正在加载数字人资源… ${Math.round(progress)}%`);
@@ -275,7 +275,17 @@ export function useXmovAvatar(
           onUnavailable?.(reason);
         };
 
-        await avatar.init();
+        await avatar.init({
+          // ⚠️ 官方文档「1.3 初始化连接房间」参数表明确：onDownloadProgress 为**必填**
+          // （init 的参数，非构造参数）；源码中为无条件调用，缺失即抛 TypeError。
+          // 文档补充：首次连接 bin 资源或首个视频资源加载失败时进度不会到 100，
+          // 此时 SDK 内部会调用 stopSession（因此该回调也是重连逻辑的一部分）。
+          onDownloadProgress: (progress: number) => {
+            setStage("initializing");
+            setDetail(`正在加载数字人资源… ${Math.round(progress)}%`);
+          },
+          initModel: "normal",
+        });
         if (initError) return; // 初始化已失败并在 onMessage 中上报（init 仍会 resolve）
         if (disposed) {
           avatar.destroy?.();
