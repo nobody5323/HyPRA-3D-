@@ -11,7 +11,7 @@
 
 import json
 
-from app.llm.base import ChatMessage, LLMProvider, ToolCall
+from app.llm.base import AgentResult, ChatMessage, LLMProvider, ToolCall
 
 # 关键词 → 共情话术（按序匹配，首个命中生效）
 _KEYWORD_REPLIES: list[tuple[tuple[str, ...], str]] = [
@@ -54,9 +54,92 @@ _DEFAULT_REPLY = (
 
 
 class MockLLMProvider(LLMProvider):
-    """确定性占位实现（关键词共情，无网络请求）。"""
+    """确定性占位实现（关键词共情，无网络请求）。
+
+    scripted_rounds: 可选的「脚本」，用于测试多轮 Agent 工具循环——
+    每个元素是某一轮返回的 tool_calls；脚本用尽后回落默认行为
+    （直接返回情绪工具调用）。
+    """
 
     name = "mock"
+
+    def __init__(self, scripted_rounds: list[list[ToolCall]] | None = None) -> None:
+        self._script: list[list[ToolCall]] = list(scripted_rounds or [])
+        self._cursor = 0
+
+    def reset_script(self) -> None:
+        """重置脚本游标（同实例多次调用时用）。"""
+        self._cursor = 0
+
+    def _next_scripted_calls(self, messages: list[ChatMessage]) -> list[ToolCall]:
+        """取本轮的 tool_calls：优先按脚本，脚本用尽则回落默认（情绪工具）。"""
+        if self._cursor < len(self._script):
+            calls = self._script[self._cursor]
+            self._cursor += 1
+            return calls
+        return self.chat_with_tools(messages, []) or []
+
+    def chat_with_tool_loop(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        executor,
+        *,
+        final_tool: str | None = None,
+        max_rounds: int = 2,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+    ) -> AgentResult:
+        """模拟 Agent 循环：按脚本模拟「调用工具 → 回传 → 再调用」的过程。"""
+        executed: list[dict] = []
+        rounds = 0
+        for _ in range(max_rounds):
+            rounds += 1
+            calls = self._next_scripted_calls(messages)
+            if not calls:
+                reply = self.chat(messages, temperature=temperature)
+                return AgentResult(reply=reply, tool_calls=executed, rounds=rounds)
+
+            final_call = next(
+                (c for c in calls if final_tool and c.name == final_tool), None
+            )
+            if final_call is not None:
+                # 同轮的其它（业务）工具仍需执行，不丢失「办事」意图
+                for call in calls:
+                    if call.name == final_tool:
+                        continue
+                    content = executor(call.name, call.arguments)
+                    executed.append(
+                        {"name": call.name, "arguments": call.arguments, "result": content}
+                    )
+                return AgentResult(
+                    emotion_call=final_call.arguments, tool_calls=executed, rounds=rounds
+                )
+
+            for call in calls:
+                content = executor(call.name, call.arguments)
+                executed.append(
+                    {"name": call.name, "arguments": call.arguments, "result": content}
+                )
+
+        # 收尾轮：不再执行工具，只取最终结果（终止工具或纯文本）
+        rounds += 1
+        calls = self._next_scripted_calls(messages)
+        final_call = next(
+            (c for c in calls if final_tool and c.name == final_tool), None
+        )
+        if final_call is not None:
+            return AgentResult(
+                emotion_call=final_call.arguments, tool_calls=executed, rounds=rounds
+            )
+        return AgentResult(
+            reply=self.chat(messages, temperature=temperature),
+            tool_calls=executed,
+            rounds=rounds,
+        )
 
     def chat(
         self,

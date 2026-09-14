@@ -24,6 +24,8 @@ from app.tools.emotion import (
     extract_emotion_fallback,
     parse_emotion_result,
 )
+from app.tools.builtin_tools import build_tool_context
+from app.tools.registry import ToolRegistry
 from app.worldbook.matcher import match_entries
 from app.worldbook.models import WorldBookEntry
 
@@ -43,6 +45,9 @@ class ChatNodes:
         styles: dict[str, StylePreset] | None = None,
         default_style_id: str = "modern-conversational",
         model_name: str = "",
+        tool_registry: ToolRegistry | None = None,
+        mood_store=None,
+        max_tool_rounds: int = 2,
     ) -> None:
         self.presets = presets
         self.entries = entries
@@ -54,6 +59,10 @@ class ChatNodes:
         self.styles = styles or {}
         self.default_style_id = default_style_id
         self.model_name = model_name or getattr(llm_provider, "model", "")
+        # Agent 行动层：工具注册表 + 情绪日记库
+        self.tool_registry = tool_registry
+        self.mood_store = mood_store
+        self.max_tool_rounds = max_tool_rounds
 
     # ---------- 工具 ----------
 
@@ -169,33 +178,62 @@ class ChatNodes:
 
     # ---------- ⑤ LLM 生成 ----------
 
-    def generate_reply(self, state: ChatState) -> dict:
-        """生成回复 + 情绪识别（双通道），并应用「模型档 ⊕ 文风」采样参数。
+    def _build_tool_executor(self, state: ChatState):
+        """构造工具执行器（绑定本轮会话上下文与依赖）。"""
+        registry = self.tool_registry
+        context = build_tool_context(
+            state.get("companion_id", state["persona_id"]),
+            session_id=state.get("session_id", ""),
+            user_name=state.get("user_name", "用户"),
+            mood_store=self.mood_store,
+            memory_store=self.memory,
+        )
 
-        ① 主通道：function calling 结构化输出（回复 + 情绪标签一并返回）；
-        ② 降级：模型不支持工具调用 / 调用失败 → 普通 chat() + 正则兜底情绪。
+        def _execute(name: str, arguments: str) -> str:
+            if registry is None:
+                return "当前没有可用工具。"
+            return registry.execute(name, arguments, context).content
+
+        return _execute
+
+    def generate_reply(self, state: ChatState) -> dict:
+        """生成回复 + 情绪识别 + Agent 工具调用。
+
+        ① Agent 循环（chat_with_tool_loop）：模型可多轮调用工具（查记忆/记录情绪/呼吸引导），
+           直到调用终止工具（情绪工具，携带最终回复）或给出纯文本回复；
+        ② 降级：模型不支持工具调用 / 解析失败 → 普通 chat() + 正则兜底情绪。
         两通道都保证给出非空回复与一个情绪结果，绝不空转。
         """
         messages = [ChatMessage(**m) for m in state.get("messages", [])]
         sampling: ResolvedSampling | None = state.get("sampling")
         kwargs = sampling.to_provider_kwargs() if sampling is not None else {}
 
-        # ① 主通道：结构化输出
-        tool_calls = self.llm.chat_with_tools(
-            messages, [build_emotion_tool()], **kwargs
+        # 工具集：情绪工具（终止工具）+ Agent 行动层工具
+        tools = [build_emotion_tool()]
+        if self.tool_registry is not None and len(self.tool_registry) > 0:
+            tools.extend(self.tool_registry.schemas())
+
+        agent = self.llm.chat_with_tool_loop(
+            messages,
+            tools,
+            self._build_tool_executor(state),
+            final_tool=EMOTION_TOOL_NAME,
+            max_rounds=self.max_tool_rounds,
+            **kwargs,
         )
-        for call in tool_calls or []:
-            if call.name != EMOTION_TOOL_NAME:
-                continue
-            result = parse_emotion_result(call.arguments)
+        tools_used = list(agent.tool_calls or [])
+
+        # ① 终止工具（情绪）返回 → 解析出回复与情绪
+        if agent.emotion_call:
+            result = parse_emotion_result(agent.emotion_call)
             if result is not None:
-                return {"reply": result.reply, "emotion": result}
+                return {"reply": result.reply, "emotion": result, "tools_used": tools_used}
 
         # ② 降级通道：普通回复 + 兜底情绪（用真实回复替换占位文本）
-        reply = self.llm.chat(messages, **kwargs)
+        reply = agent.reply or self.llm.chat(messages, **kwargs)
         fallback = extract_emotion_fallback(state.get("user_input", ""))
         fallback.reply = reply
-        return {"reply": reply, "emotion": fallback}
+        return {"reply": reply, "emotion": fallback, "tools_used": tools_used}
 
     # ---------- ⑥ 回复后事件驱动写入 ----------
 

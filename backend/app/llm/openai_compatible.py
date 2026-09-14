@@ -95,6 +95,138 @@ class OpenAICompatibleProvider(LLMProvider):
             return ""
         return response.choices[0].message.content or ""
 
+    def chat_with_tool_loop(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+        executor,
+        *,
+        final_tool: str | None = None,
+        max_rounds: int = 2,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+    ):
+        """Agent 工具循环（OpenAI tools 协议）。
+
+        流程：LLM(tools) → 若有 tool_calls → 执行并回传 → 再调 LLM，
+        直到模型给出纯文本回复、或调用终止工具（final_tool）、或轮数用尽。
+        """
+        from app.llm.base import AgentResult
+
+        api_messages: list[dict] = [
+            {"role": m.role, "content": m.content} for m in messages
+        ]
+        executed: list[dict] = []
+        rounds = 0
+
+        def _sampling_kwargs() -> dict:
+            kwargs: dict = {"model": self.model, "temperature": temperature}
+            for key, value in (
+                ("max_tokens", max_tokens),
+                ("top_p", top_p),
+                ("frequency_penalty", frequency_penalty),
+                ("presence_penalty", presence_penalty),
+            ):
+                if value is not None:
+                    kwargs[key] = value
+            return kwargs
+
+        for round_index in range(max_rounds):
+            rounds = round_index + 1
+            response = self._client.chat.completions.create(
+                messages=api_messages, tools=tools, tool_choice="auto", **_sampling_kwargs()
+            )
+            if not response.choices:
+                break
+            message = response.choices[0].message
+            tool_calls = list(message.tool_calls or [])
+
+            # ① 无工具调用 → 最终纯文本回复
+            if not tool_calls:
+                return AgentResult(
+                    reply=message.content or "", tool_calls=executed, rounds=rounds
+                )
+
+            # ② 终止工具被调用 → 结束循环；但同轮的**业务工具仍需执行**
+            #    （模型可能在同一轮同时「办事」与给出回复，不应丢失办事意图）
+            final_call = next(
+                (c for c in tool_calls if final_tool and c.function.name == final_tool),
+                None,
+            )
+            if final_call is not None:
+                for call in tool_calls:
+                    if call.function.name == final_tool:
+                        continue
+                    content = executor(call.function.name, call.function.arguments)
+                    executed.append(
+                        {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                            "result": content,
+                        }
+                    )
+                return AgentResult(
+                    emotion_call=final_call.function.arguments,
+                    tool_calls=executed,
+                    rounds=rounds,
+                )
+
+            # ③ 执行工具并把结果回传（需按协议补 assistant + tool 两条消息）
+            api_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.function.name,
+                                "arguments": c.function.arguments,
+                            },
+                        }
+                        for c in tool_calls
+                    ],
+                }
+            )
+            for call in tool_calls:
+                content = executor(call.function.name, call.function.arguments)
+                executed.append(
+                    {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                        "result": content,
+                    }
+                )
+                api_messages.append(
+                    {"role": "tool", "tool_call_id": call.id, "content": content}
+                )
+
+        # 收尾轮：不再执行工具，只取最终结果（终止工具优先，否则纯文本）
+        rounds += 1
+        response = self._client.chat.completions.create(
+            messages=api_messages, tools=tools, tool_choice="auto", **_sampling_kwargs()
+        )
+        if not response.choices:
+            return AgentResult(reply="", tool_calls=executed, rounds=rounds)
+        message = response.choices[0].message
+        final_call = next(
+            (c for c in (message.tool_calls or []) if final_tool and c.function.name == final_tool),
+            None,
+        )
+        if final_call is not None:
+            return AgentResult(
+                emotion_call=final_call.function.arguments,
+                tool_calls=executed,
+                rounds=rounds,
+            )
+        return AgentResult(
+            reply=message.content or "", tool_calls=executed, rounds=rounds
+        )
+
     def chat_with_tools(
         self,
         messages: list[ChatMessage],
