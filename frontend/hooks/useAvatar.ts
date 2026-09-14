@@ -177,6 +177,13 @@ export function useXmovAvatar(
   const [stage, setStage] = useState<AvatarInitStage>("unconfigured");
   const [detail, setDetail] = useState("");
   const avatarRef = useRef<any>(null);
+  /** 同步跟踪具身状态（供 speak 判断是否需要先切回待机） */
+  const stateRef = useRef<AvatarState>("idle");
+
+  const updateState = useCallback((next: AvatarState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
 
   // 凭证内容变化 → 重建 SDK（用字符串做依赖，避免对象引用每次变化）
   const credentialKey = credentials
@@ -258,10 +265,11 @@ export function useXmovAvatar(
         // 语音状态 → 驱动具身状态机（voice_end 后回到交互待机）
         const handleVoiceState = (event: unknown) => {
           const name = typeof event === "string" ? event : (event as any)?.state;
-          if (name === "voice_start") setState("speak");
+          console.log("[HyPRA][avatar] 语音状态:", name);
+          if (name === "voice_start") updateState("speak");
           if (name === "voice_end") {
             avatar?.interactiveidle?.(); // SDK 公开方法（小写无下划线）
-            setState("idle");
+            updateState("idle");
           }
         };
         avatar.onVoiceStateChange = handleVoiceState;
@@ -315,21 +323,34 @@ export function useXmovAvatar(
   }, [containerId, enabled, credentialKey, revision]);
 
   /** 切换具身状态：同步更新 React 状态与 SDK 行为状态 */
-  const setAvatarState = useCallback((next: AvatarState) => {
-    setState(next);
-    const avatar = avatarRef.current;
-    if (!avatar) return;
-    // 官方公开方法：idle() / listen() / interactiveidle()
-    if (next === "idle") avatar.idle?.();
-    else if (next === "listen") avatar.listen?.();
-    else if (next === "think") avatar.interactiveidle?.();
-  }, []);
+  const setAvatarState = useCallback(
+    (next: AvatarState) => {
+      updateState(next);
+      const avatar = avatarRef.current;
+      if (!avatar) return;
+      // 官方公开方法：idle() / listen() / interactiveidle()
+      if (next === "idle") avatar.idle?.();
+      else if (next === "listen") avatar.listen?.();
+      else if (next === "think") avatar.interactiveidle?.();
+    },
+    [updateState],
+  );
 
   const speak = useCallback(async (text: string, ssml?: string) => {
     const avatar = avatarRef.current;
     if (!avatar) return;
-    // 官方约束：speak 不能连续调用，先切到交互待机
-    avatar.interactiveidle?.();
+
+    // 官方约束：speak 不允许连续调用，需先用 interactive_idle 做状态切换；
+    // 而状态切换是异步的（经 WebSocket 下发），立即 speak 会被忽略——
+    // 因此仅在「正在播报」时打断并等待片刻，其余情况直接播报。
+    if (stateRef.current === "speak") {
+      console.log("[HyPRA][avatar] 正在播报，先打断并切回交互待机");
+      avatar.interrupt?.();
+      avatar.interactiveidle?.();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    console.log("[HyPRA][avatar] speak 调用:", (ssml || text).slice(0, 60));
     avatar.speak(ssml || text, true, true);
   }, []);
 
@@ -337,8 +358,8 @@ export function useXmovAvatar(
     const avatar = avatarRef.current;
     avatar?.interrupt?.();
     avatar?.interactiveidle?.();
-    setState("idle");
-  }, []);
+    updateState("idle");
+  }, [updateState]);
 
   return {
     state,
