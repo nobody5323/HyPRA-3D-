@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AVATAR_STATE_LABELS, type AvatarState } from "@/lib/types";
+import type { AvatarCredentials } from "@/lib/avatar-config";
 
 export interface AvatarController {
   state: AvatarState;
@@ -43,11 +44,6 @@ export interface AvatarController {
 const XMOV_SDK_URL =
   "https://media.xingyun3d.com/xingyun3d/general/litesdk/xmovAvatar@latest.js";
 const XMOV_GATEWAY = "https://nebula-agent.xingyun3d.com/user/v1/ttsa/session";
-
-/** 魔珐 SDK 是否具备必要配置（构建时内联，客户端可读） */
-export const XMOV_CONFIGURED = Boolean(
-  process.env.NEXT_PUBLIC_XMOV_APP_ID && process.env.NEXT_PUBLIC_XMOV_APP_SECRET,
-);
 
 // =============================================================
 // 实现一：浏览器原生 TTS（零依赖，默认）
@@ -112,6 +108,8 @@ export function useBrowserAvatar(): AvatarController {
 // =============================================================
 
 interface UseXmovOptions {
+  /** 魔珐凭证（运行时配置：界面填写 > 构建时环境变量）；为空时不加载 SDK */
+  credentials: AvatarCredentials | null;
   /** 是否启用（false 时不加载 SDK，用于自动降级） */
   enabled?: boolean;
   /** 不可用时回调（调用方据此回退浏览器实现） */
@@ -142,19 +140,24 @@ function loadXmovSdk(): Promise<void> {
 
 export function useXmovAvatar(
   containerId = "avatar-container",
-  options: UseXmovOptions = {},
+  options: UseXmovOptions,
 ): AvatarController {
-  const { enabled = true, onUnavailable } = options;
+  const { credentials, enabled = true, onUnavailable } = options;
   const [state, setState] = useState<AvatarState>("idle");
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const avatarRef = useRef<any>(null);
 
+  // 凭证内容变化 → 重建 SDK（用字符串做依赖，避免对象引用每次变化）
+  const credentialKey = credentials
+    ? `${credentials.appId}:${credentials.appSecret}`
+    : "";
+
   useEffect(() => {
     if (!enabled) return;
 
-    if (!XMOV_CONFIGURED) {
-      const reason = "未配置 NEXT_PUBLIC_XMOV_APP_ID / APP_SECRET";
+    if (!credentials) {
+      const reason = "未配置魔珐密钥（可在页面「数字人设置」中填写）";
       setNotice(reason);
       onUnavailable?.(reason);
       return;
@@ -169,8 +172,8 @@ export function useXmovAvatar(
 
         const avatar = new (window as any).XmovAvatar({
           containerId,
-          appId: process.env.NEXT_PUBLIC_XMOV_APP_ID,
-          appSecret: process.env.NEXT_PUBLIC_XMOV_APP_SECRET,
+          appId: credentials.appId,
+          appSecret: credentials.appSecret,
           gatewayServer: XMOV_GATEWAY,
           hardwareAcceleration: "prefer-hardware",
         });
@@ -206,9 +209,9 @@ export function useXmovAvatar(
       avatarRef.current?.destroy?.(); // 官方要求：卸载前销毁，释放 WebGL 资源
       avatarRef.current = null;
     };
-    // containerId 变化时重建（其余依赖刻意不入列，避免重复初始化）
+    // containerId 或凭证变化时重建（其余依赖刻意不入列，避免重复初始化）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, enabled]);
+  }, [containerId, enabled, credentialKey]);
 
   const speak = useCallback(async (text: string, ssml?: string) => {
     const avatar = avatarRef.current;
