@@ -210,14 +210,31 @@ export function useXmovAvatar(
         const element = containerRef?.current ?? null;
         // SDK 失败时 init() 仍会 resolve（如容器不存在），因此用标志记录 onMessage 报错
         let initError: string | null = null;
-        const avatar = new (window as any).XmovAvatar({
-          containerId: element ? undefined : containerId,
-          container: element ?? undefined,
+
+        // 构造参数：
+        // - containerId / container：容器定位（选择器兜底 + 元素优先）
+        // - 回调：官方列为初始化参数，且 SDK 内部**无条件调用 onDownloadProgress**，
+        //   缺失会抛 TypeError（实测错误：Cannot read properties of undefined 'onDownloadProgress'）
+        const config: Record<string, unknown> = {
+          containerId,
           appId: credentials.appId,
           appSecret: credentials.appSecret,
           gatewayServer: XMOV_GATEWAY,
           hardwareAcceleration: "prefer-hardware",
-          // SDK 的错误/提示均通过 onMessage 回调上报（init 仍会 resolve，故必须监听）
+
+          /** 资源加载进度（必需回调，同时用于展示初始化进度） */
+          onDownloadProgress: (progress: number) => {
+            setStage("initializing");
+            setDetail(`正在加载数字人资源… ${Math.round(progress)}%`);
+          },
+          /** SDK 状态 → 具身状态机（speak / idle 等） */
+          onStateChange: (sdkState: string) => {
+            const value = String(sdkState ?? "").toLowerCase();
+            if (value.includes("speak") || value.includes("play")) setState("speak");
+            else if (value.includes("listen")) setState("listen");
+            else if (value.includes("idle")) setState("idle");
+          },
+          /** SDK 消息 / 错误（错误通过 code 字段区分） */
           onMessage: (payload: any) => {
             if (payload && payload.code !== undefined) {
               const reason = `${payload.message ?? "SDK 报错"}（code=${payload.code}）`;
@@ -228,7 +245,15 @@ export function useXmovAvatar(
               onUnavailable?.(reason);
             }
           },
-        });
+          /** 以下回调官方示例均提供，这里仅占位避免 SDK 内部空引用 */
+          onNetworkInfo: () => {},
+          onStatusChange: () => {},
+          onStateRenderChange: () => {},
+          onWidgetEvent: () => {},
+        };
+        if (element) config.container = element;
+
+        const avatar = new (window as any).XmovAvatar(config);
 
         // 语音状态 → 驱动具身状态机（voice_end 后回到交互待机）
         const handleVoiceState = (event: unknown) => {
