@@ -1,5 +1,9 @@
 # HyPRA-3D：打通提示词架构与混合记忆的情感陪伴 3D 交互系统
 
+[![CI](https://github.com/nobody5323/HyPRA-3D-/actions/workflows/ci.yml/badge.svg)](https://github.com/nobody5323/HyPRA-3D-/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![Tests](https://img.shields.io/badge/tests-286%20passed-brightgreen)
+
 > 在高速发展的网络情感、日益破碎化的日常生活中，给现代人一个完全符合其幻想的 AI 陪聊助手，
 > 化解当代人各方面的压力。
 
@@ -20,10 +24,17 @@ HyPRA 借鉴 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 的提示
 - **3D 数字人联动**：文本 + 情绪标签 → **SSML 播报指令**（含 KA 动作）→ 魔珐星云具身驱动 SDK 实时驱动
   （口型/表情/动作由 SDK 完成）；同时提供**渲染无关的驱动时间轴**，可扩展接入任意 3D/2D 模型。
 
-## 🧠 设计参照
+## 🧠 设计参照与文档
 
-记忆与提示词机制的详细参照说明见 [`docs/sillytavern-memory-design-reference.md`](docs/sillytavern-memory-design-reference.md)，
-项目级开发约定见 [`AGENTS.md`](AGENTS.md)。
+| 文档 | 内容 |
+|---|---|
+| [`docs/competition-gap-analysis.md`](docs/competition-gap-analysis.md) | **赛题差距分析**（评审维度对照与行动优先级） |
+| [`docs/why-embodied-avatar.md`](docs/why-embodied-avatar.md) | **不可替代性论证**（为何情感陪伴需要具身数字人） |
+| [`docs/frontend-plan.md`](docs/frontend-plan.md) | 前端方案（Next.js + 魔珐 SDK + 具身状态机） |
+| [`docs/frontend-avatar-integration.md`](docs/frontend-avatar-integration.md) | 前端 SDK 接入指南（含 speak 注意事项与 FAQ） |
+| [`docs/deployment.md`](docs/deployment.md) | 部署说明（Docker Compose 一键部署 / 开发模式） |
+| [`docs/sillytavern-memory-design-reference.md`](docs/sillytavern-memory-design-reference.md) | 记忆与提示词机制的设计参照调研 |
+| [`AGENTS.md`](AGENTS.md) | 项目开发约定（架构分层、红线、验证要求） |
 
 ## 🚀 快速开始
 
