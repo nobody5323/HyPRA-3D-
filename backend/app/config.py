@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_base_url: str = ""
 
+    # ---- 数字人驱动（M5）----
+    digital_human_provider: str = "local"   # local（零依赖降级）| xmov（魔珐星云）
+    xmov_app_id: str = ""                    # 魔珐控制台「密钥管理」获取
+    xmov_secret: str = ""
+    xmov_voice: str = "XMOV_LV_TTS__13"      # 基础音色；Pro 音色另计费
+    xmov_host: str = "nebula-agent.xingyun3d.com"
+    media_dir: str = "media"                 # 音频/视频产物目录（gitignore）
+    avatar_enabled: bool = True              # 是否在 chat 后附带数字人驱动数据
+
 
 def get_settings() -> Settings:
     """返回单例配置（FastAPI 依赖注入用）。"""
